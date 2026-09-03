@@ -20,6 +20,16 @@ If you've built something useful for Haven, please PR it in. See [`CONTRIBUTING.
 
 _None yet — be the first to add one!_
 
+### Integrations that live elsewhere
+
+Projects that talk to Haven but are developed in their own repositories. They
+are listed here so people can find them; the code stays with its author, who
+updates it on their own schedule.
+
+| Name | Description | Links | Author |
+|------|-------------|-------|--------|
+| _None yet_ | | | |
+
 ---
 
 ## Using a bot from this library

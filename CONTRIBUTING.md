@@ -41,6 +41,16 @@ We do not deep-audit your code. Users who deploy your bot do so at their own ris
 - Code that's just an unrelated project with a Haven sticker on it — it needs to actually integrate with Haven.
 - Bundled binaries you don't have source for.
 
+## Listing a project that lives in its own repo
+
+If your integration is actively developed elsewhere (a plugin for another app,
+a bot with its own release cycle), you do not have to copy the code here. Add a
+row to the **Integrations that live elsewhere** table in the root `README.md`
+with the name, a one-line description, a link to your repository, and your
+name. Keep developing in your own repo; only come back here if the name, link,
+or description changes. The same rules on secrets, telemetry, and actually
+integrating with Haven apply.
+
 ## Updating your bot
 
 You own your folder. PR updates / fixes / version bumps as needed. If you stop maintaining it, the catalog entry stays but we may mark it as unmaintained.
