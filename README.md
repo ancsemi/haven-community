@@ -26,9 +26,10 @@ Projects that talk to Haven but are developed in their own repositories. They
 are listed here so people can find them; the code stays with its author, who
 updates it on their own schedule.
 
-| Name | Description | Links | Author |
-|------|-------------|-------|--------|
-| _None yet_ | | | |
+| Name         | Description                            | Links                                                     | Author      |
+|--------------|----------------------------------------|-----------------------------------------------------------|-------------|
+| Haven.DotNet | Haven bot library for .NET developers  | [Haven.DotNet](https://github.com/josolanes/Haven.DotNet) | [@josolanes](https://github.com/josolanes) |
+| ContainrBot  | An extensible container management chat bot with flexible chat service and container orchestration support  | [ContainrBot](https://github.com/josolanes/ContainrBot) | [@josolanes](https://github.com/josolanes) |
 
 ---
 
