@@ -24,6 +24,33 @@ Pick whichever language you like. Node.js, Python, Go, PHP, Cloudflare Workers, 
 4. Add a one-line entry to the catalog table in the root [`README.md`](README.md).
 5. Open a PR using the template — fill in the checklist honestly.
 
+## Things about Haven's bot API that catch people out
+
+- **Who ran a command.** A slash command reaches your bot as
+  `{ "event": "slash_command", "command", "args", "channelCode", "author": { "id", "username" } }`.
+  The person is `author`, not `user`.
+- **Command names are letters only.** `/b64` or `/say-echo` can never be typed.
+  Some names belong to Haven itself and can't be registered (or never leave the
+  app): `afk`, `bbs`, `boobs`, `brb`, `butt`, `clear`, `disapprove`, `flip`,
+  `gif`, `hug`, `lenny`, `me`, `nick`, `play`, `poll`, `roll`, `schedule`,
+  `shrug`, `spoiler`, `tableflip`, `time`, `tts`, `unflip`, `wave`.
+- **A second `/` makes it chat.** Text like `/tz 3pm America/New_York` is posted as
+  an ordinary message, so don't make people type paths or URLs after a command.
+- **Private replies.** Post with `"ephemeral": true` and `"recipient_id": <author.id>`
+  to answer one person only. Use it for errors, usage hints and anything personal.
+- **Haven doesn't tell your bot anyone's roles.** A command only some people should
+  use needs its own list of allowed user ids, and an empty list must mean nobody,
+  not everybody.
+- **Answer 200 once you've acted.** If your bot returns a 5xx, Haven sends the
+  same event again 5 seconds later, so anything it already did happens twice.
+- **Running the bot on the same machine or network as Haven.** Haven refuses to
+  call back to private addresses unless the server sets
+  `HAVEN_ALLOW_PRIVATE_CALLBACKS=true`; say so in your README.
+- **Rate limit.** Haven accepts 30 webhook posts a minute from one address, shared
+  by every bot on that machine.
+- **Loading `.env`.** Node doesn't read `.env` by itself. `node --env-file=.env server.js`
+  (Node 20.6 or newer) does.
+
 ## What we check before merging
 
 - Code does what the README claims and doesn't contain anything malicious or obviously broken.

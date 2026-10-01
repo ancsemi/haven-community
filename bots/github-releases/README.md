@@ -50,8 +50,8 @@ git clone https://github.com/ancsemi/haven-community.git
 cd haven-community/bots/github-releases
 npm install
 cp .env.example .env
-# edit .env with your values, then:
-node server.js
+# edit .env with your values, then (Node 20.6 or newer):
+node --env-file=.env server.js
 ```
 
 ### 4. Configure the GitHub webhook
