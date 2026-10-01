@@ -1,0 +1,16 @@
+{
+  "name": "haven-bot-uuid-tool",
+  "version": "1.0.0",
+  "description": "Haven /uuid [n] — generate UUID v4 values.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "license": "MIT"
+}

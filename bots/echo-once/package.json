@@ -1,0 +1,16 @@
+{
+  "name": "haven-bot-echo-once",
+  "version": "1.0.0",
+  "description": "Haven /echo with ephemeral+recipient_id when available, else public.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "license": "MIT"
+}

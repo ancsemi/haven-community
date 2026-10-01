@@ -1,0 +1,16 @@
+{
+  "name": "haven-bot-custom-commands",
+  "version": "1.0.0",
+  "description": "User-defined canned responses via /tag and optional !prefix triggers.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "license": "MIT"
+}
