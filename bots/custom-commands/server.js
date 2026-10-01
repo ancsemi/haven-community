@@ -1,4 +1,4 @@
-// custom-commands — Haven community bot
+// custom-commands: Haven community bot
 //
 // Slash /tag set|get|delete|list for user-defined canned responses.
 // Optional message-event prefix triggers (e.g. !faq) when ENABLE_PREFIX=true.
@@ -23,20 +23,33 @@ const MAX_RESPONSE_LEN = Math.max(1, parseInt(process.env.MAX_RESPONSE_LEN || '2
 const ENABLE_PREFIX = String(process.env.ENABLE_PREFIX || 'true').toLowerCase() === 'true';
 const PREFIX = process.env.PREFIX != null && process.env.PREFIX !== '' ? process.env.PREFIX : '!';
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
+// Haven user ids with admin rights in this bot. Empty = nobody.
+const ADMIN_USER_IDS = new Set(
+  (process.env.ADMIN_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
 }
+if (!ADMIN_USER_IDS.size) {
+  console.warn('WARNING: ADMIN_USER_IDS is empty, so only the creator of a tag can overwrite or delete it.');
+}
 
 function loadState() {
   try {
     const raw = fs.readFileSync(STATE_FILE, 'utf8');
     const j = JSON.parse(raw);
-    return { tags: j.tags && typeof j.tags === 'object' ? j.tags : {} };
+    // No prototype, so names like "constructor" or "__proto__" are plain keys.
+    const tags = Object.create(null);
+    if (j.tags && typeof j.tags === 'object') Object.assign(tags, j.tags);
+    return { tags };
   } catch {
-    return { tags: {} };
+    return { tags: Object.create(null) };
   }
 }
 
@@ -85,6 +98,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -109,12 +123,27 @@ async function registerCommands() {
         { name: 'list', description: 'List all tags' },
       ],
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
   } else {
     console.log('[commands] registered /tag');
   }
+}
+
+// The tag's creator or an ADMIN_USER_IDS entry may overwrite or delete it.
+// Tags saved before createdById existed fall back to the last editor.
+function canModify(tag, user) {
+  const uid = user && user.id != null && user.id !== '' ? String(user.id) : null;
+  if (!uid) return false;
+  if (ADMIN_USER_IDS.has(uid)) return true;
+  const owner = tag.createdById != null ? tag.createdById : tag.updatedById;
+  return owner != null && String(owner) === uid;
+}
+
+function notAllowed(name) {
+  return `⛔ Only the creator of \`${name}\` or a bot admin (ADMIN_USER_IDS) can change it.`;
 }
 
 function tagCount() {
@@ -155,6 +184,10 @@ async function handleTagSlash(args, user) {
       await postToHaven(`No tag named \`${name}\`.`);
       return;
     }
+    if (!canModify(state.tags[name], user)) {
+      await postToHaven(notAllowed(name));
+      return;
+    }
     delete state.tags[name];
     saveState(state);
     await postToHaven(`🗑️ Deleted tag \`${name}\`.`);
@@ -168,15 +201,24 @@ async function handleTagSlash(args, user) {
       await postToHaven('Usage: `/tag set <name> <response>`');
       return;
     }
-    if (!state.tags[name] && tagCount() >= MAX_TAGS) {
+    const prev = state.tags[name];
+    if (prev && !canModify(prev, user)) {
+      await postToHaven(notAllowed(name));
+      return;
+    }
+    if (!prev && tagCount() >= MAX_TAGS) {
       await postToHaven(`❌ Too many tags (max ${MAX_TAGS}). Delete some first.`);
       return;
     }
+    const who = user && (user.username || user.displayName) ? (user.username || user.displayName) : '';
+    const whoId = user && user.id != null ? user.id : null;
     state.tags[name] = {
       response,
+      createdBy: prev ? prev.createdBy || prev.updatedBy || '' : who,
+      createdById: prev ? (prev.createdById != null ? prev.createdById : prev.updatedById ?? null) : whoId,
       updatedAt: Date.now(),
-      updatedBy: user && (user.username || user.displayName) ? (user.username || user.displayName) : '',
-      updatedById: user && user.id != null ? user.id : null,
+      updatedBy: who,
+      updatedById: whoId,
     };
     saveState(state);
     await postToHaven(`✅ Tag \`${name}\` saved.`);
@@ -248,7 +290,8 @@ app.post('/haven', async (req, res) => {
 
   try {
     if (event === 'slash_command' && String(payload.command || '').toLowerCase() === 'tag') {
-      await handleTagSlash(payload.args, payload.user || {});
+      // Haven sends the caller as payload.author.
+      await handleTagSlash(payload.args, payload.author || {});
       return res.json({ ok: true });
     }
     if (event === 'message' || event === 'message-created' || event === 'message_create') {

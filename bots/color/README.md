@@ -1,6 +1,6 @@
 # color
 
-Inspect a color: `/color #RRGGBB` prints hex, RGB, HSL/HSV, decimal, luminance, and contrast vs white/black (text only — no image generation).
+Inspect a color: `/color #RRGGBB` prints hex, RGB, HSL/HSV, decimal, luminance, and contrast vs white/black (text only, no image or color swatch).
 
 ## Commands
 
@@ -38,8 +38,10 @@ cd haven-community/bots/color
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
 
 ## Configuration (`.env`)
 

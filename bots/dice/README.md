@@ -1,13 +1,14 @@
 # dice
 
-Classic RPG dice for Haven — `/roll NdM+K` with cryptographically random faces.
+Classic RPG dice for Haven: `/dice NdM+K` with cryptographically random faces.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/roll [notation]` | Roll dice (default `1d20` if omitted) |
-| `/dice [notation]` | Alias for `/roll` |
+| `/dice [notation]` | Roll dice (default `1d20` if omitted) |
+
+Haven has its own built-in `/roll`, so this bot uses `/dice`.
 
 ### Notation
 
@@ -36,8 +37,10 @@ cd haven-community/bots/dice
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
 
 ## Configuration (`.env`)
 

@@ -1,6 +1,6 @@
-// choose — Haven community bot
+// choose: Haven community bot
 //
-// Slash /choose a | b | c — random pick among options.
+// Slash /choose a | b | c: random pick among options.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -51,6 +51,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -71,6 +72,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -115,7 +117,8 @@ async function handleSlash(payload) {
   if (command !== 'choose' && command !== 'pick') return { ignored: true };
 
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
   const who = user.username || user.displayName || 'Someone';
 
   if (!args) {

@@ -1,6 +1,7 @@
-// dice — Haven community bot
+// dice: Haven community bot
 //
-// Slash /roll NdM+K classic dice notation (e.g. 2d6+3, d20, 4d6).
+// Slash /dice NdM+K classic dice notation (e.g. 2d6+3, d20, 4d6).
+// Haven has its own /roll built in, so this bot uses /dice.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -53,6 +54,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -65,14 +67,14 @@ async function registerCommands() {
   if (!token) return;
   const url = `${new URL(HAVEN_WEBHOOK_URL).origin}/api/webhooks/${token}/commands`;
   const cmds = [
-    { command: 'roll', description: 'Roll dice: /roll NdM+K (e.g. 2d6+3)' },
-    { command: 'dice', description: 'Alias for /roll' },
+    { command: 'dice', description: 'Roll dice: /dice NdM+K (e.g. 2d6+3)' },
   ];
   for (const body of cmds) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -135,7 +137,7 @@ function formatRoll(result, who) {
       ? rolls.join(', ')
       : `${rolls.slice(0, 20).join(', ')}… (+${rolls.length - 20} more)`;
   const lines = [
-    `🎲 **${who || 'Roll'}** — \`${label}\``,
+    `🎲 **${who || 'Roll'}** rolled \`${label}\``,
     `Rolls: [${detail}]`,
     `**Total: ${sum}**`,
   ];
@@ -144,10 +146,11 @@ function formatRoll(result, who) {
 
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
-  if (command !== 'roll' && command !== 'dice') return { ignored: true };
+  if (command !== 'dice') return { ignored: true };
 
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
   const who = user.username || user.displayName || 'Roll';
 
   try {
@@ -155,7 +158,7 @@ async function handleSlash(payload) {
     const result = rollDice(spec);
     await postToHaven(formatRoll(result, who));
   } catch (err) {
-    await postToHaven(`❌ ${err.message}\nUsage: \`/roll 2d6+3\` · \`/roll d20\``);
+    await postToHaven(`❌ ${err.message}\nUsage: \`/dice 2d6+3\` · \`/dice d20\``);
   }
 }
 

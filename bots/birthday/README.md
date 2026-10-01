@@ -31,10 +31,12 @@ cd haven-community/bots/birthday
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
 
-Keep the process running so the daily check can fire. Manual force: `POST /announce`.
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
+
+Keep the process running so the daily check can fire. To force the check by hand, set `ANNOUNCE_TOKEN` and send `POST /announce` with the header `Authorization: Bearer <ANNOUNCE_TOKEN>`. Without `ANNOUNCE_TOKEN` that endpoint is turned off.
 
 ## Configuration (`.env`)
 
@@ -43,13 +45,14 @@ Keep the process running so the daily check can fire. Manual force: `POST /annou
 | `HAVEN_WEBHOOK_URL` | yes | Full Haven bot webhook URL |
 | `CALLBACK_SECRET` | yes | HMAC secret for `/haven` |
 | `TIMEZONE` | no | IANA zone (default `UTC`) |
-| `ANNOUNCE_HOUR` | no | Local hour 0–23 after which announce may run (default `9`) |
+| `ANNOUNCE_HOUR` | no | Local hour (0 to 23) after which announce may run (default `9`, `0` is midnight) |
 | `CHECK_INTERVAL_MS` | no | How often to re-check (default 15 min) |
 | `STATE_FILE` | no | JSON path (default `./data/birthday-state.json`) |
 | `MESSAGE_TEMPLATE` | no | Placeholders `{names}` `{date}` `{timezone}` |
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
 | `HAVEN_WEBHOOK_TOKEN` | no | Slash registration token |
+| `ANNOUNCE_TOKEN` | no | Enables `POST /announce`; send it as `Authorization: Bearer <token>` (unset = endpoint off) |
 | `PORT` | no | HTTP port (default `3000`) |
 
 ## Behaviour

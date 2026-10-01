@@ -39,8 +39,10 @@ cd haven-community/bots/confessions
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
 
 ## Configuration (`.env`)
 
@@ -59,8 +61,9 @@ node server.js
 ## Privacy notes
 
 - The **posted message content never includes** the confessor’s username or user id.
-- Cooldown tracking uses an in-memory key derived from the caller (not written to channel).
-- Haven/server logs and slash payload delivery may still see the invoking user on the **callback side** — treat the bot host as trusted, same as any slash bot.
+- The cooldown is keyed by the caller's Haven user id. It is held in memory only (never logged, posted or saved to disk) and forgotten on restart.
+- The usage hint and the "please wait" notice are private replies that only the caller sees.
+- Haven/server logs and slash payload delivery may still see the invoking user on the **callback side**, so treat the bot host as trusted, same as any slash bot.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

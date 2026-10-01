@@ -1,4 +1,4 @@
-// automod — Haven community bot
+// automod: Haven community bot
 //
 // Listens for Haven message events, matches a word blocklist, then optionally
 // warns, deletes the message, and/or mutes the author (can_moderate).
@@ -59,7 +59,7 @@ function loadBlocklist() {
 
 const blocklist = loadBlocklist();
 if (!blocklist.length) {
-  console.warn('[automod] warning: empty blocklist — set BAD_WORDS or BLOCKLIST_FILE');
+  console.warn('[automod] warning: empty blocklist, set BAD_WORDS or BLOCKLIST_FILE');
 }
 
 function verifySignature(rawBody, headerValue) {
@@ -87,11 +87,21 @@ function originBase() {
   return new URL(HAVEN_WEBHOOK_URL).origin;
 }
 
+// Whole words or phrases only, case-insensitive. Letters, digits and _ count as
+// part of a word, so "ass" does not fire on "class" or "passage".
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+const blockPatterns = blocklist.map((word) => ({
+  word,
+  re: new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(word)}(?![\\p{L}\\p{N}_])`, 'iu'),
+}));
+
 function findMatch(content) {
-  const lower = String(content || '').toLowerCase();
-  if (!lower) return null;
-  for (const word of blocklist) {
-    if (word && lower.includes(word)) return word;
+  const text = String(content || '');
+  if (!text) return null;
+  for (const { word, re } of blockPatterns) {
+    if (re.test(text)) return word;
   }
   return null;
 }
@@ -104,6 +114,7 @@ async function postWebhook(url, content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -120,7 +131,7 @@ async function deleteMessage(messageId) {
   const token = webhookToken();
   if (!token || messageId == null) return false;
   const url = `${originBase()}/api/webhooks/${token}/messages/${messageId}`;
-  const res = await fetch(url, { method: 'DELETE' });
+  const res = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(10000) });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.warn(`[delete] ${res.status} ${text.slice(0, 200)}`);
@@ -141,6 +152,7 @@ async function muteUser(userId, reason) {
       duration: MUTE_DURATION_MIN,
       reason: String(reason || 'automod').slice(0, 200),
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -253,8 +265,10 @@ app.post('/haven', async (req, res) => {
     const result = await handleMessage(payload);
     res.json(result);
   } catch (err) {
+    // Answer 200 anyway: Haven retries a message event after a 5xx, which would
+    // delete or mute a second time.
     console.error(`[${new Date().toISOString()}] handler error:`, err.message);
-    res.status(500).json({ error: err.message });
+    res.json({ ok: false });
   }
 });
 

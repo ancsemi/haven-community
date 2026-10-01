@@ -1,13 +1,15 @@
 # afk
 
-Mark yourself AFK, clear with `/back`, and auto-announce when someone mentions an AFK username.
+Mark yourself AFK with `/away`, clear with `/back`, and auto-announce when someone mentions an AFK username.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/afk [reason]` | Set AFK status (optional reason) |
+| `/away [reason]` | Set AFK status (optional reason) |
 | `/back` | Clear AFK status |
+
+Haven has its own built-in `/afk`, so this bot uses `/away`.
 
 ### Message behaviour
 
@@ -22,7 +24,7 @@ Mark yourself AFK, clear with `/back`, and auto-announce when someone mentions a
 1. **Settings → Server Admin Settings → Bots** → create a bot in the channel.
 2. Set **Callback URL** to `https://your-bot-host/haven`.
 3. Set **Callback Secret** (same as `CALLBACK_SECRET`).
-4. Subscribe the bot callback to **`message`** events (and slash commands).
+4. Bots receive **`message`** events by default, so there is nothing extra to turn on.
 5. Copy **Webhook URL** → `HAVEN_WEBHOOK_URL`.
 6. Copy **Webhook Token** → `HAVEN_WEBHOOK_TOKEN` for slash registration.
 
@@ -34,8 +36,10 @@ cd haven-community/bots/afk
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
 
 ## Configuration (`.env`)
 
@@ -55,6 +59,7 @@ node server.js
 - AFK entries persist across restarts via `STATE_FILE`.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 - Handles `slash_command` and `message` / `message-created` events.
+- Always answers Haven with 200, even when posting fails, so Haven does not retry and repeat an announcement. Errors are logged.
 
 ## License
 

@@ -1,17 +1,17 @@
 # base64
 
-Encode or decode Base64 text in chat: `/b64 encode hello` / `/b64 decode aGVsbG8=`.
+Encode or decode Base64 text in chat: `/encode hello` / `/decode aGVsbG8=`.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/b64 encode <text>` | UTF-8 → Base64 |
-| `/b64 decode <data>` | Base64 → UTF-8 (or hex if binary) |
-| `/b64 e …` / `/b64 d …` | Shortcuts |
-| `/base64 …` | Alias |
+| `/encode <text>` | UTF-8 → Base64 |
+| `/decode <data>` | Base64 → UTF-8 (or hex if binary) |
 
 URL-safe Base64 (`-` / `_`) is accepted on decode.
+
+Haven only routes command names made of letters, which is why this bot uses `/encode` and `/decode` rather than `/b64`. Haven also treats a slash message with a second `/` in it as a file path and posts it as plain chat, so the text after `/encode` or `/decode` cannot contain `/`. For Base64 that contains `/`, swap each `/` for `_` (the URL-safe form) before decoding.
 
 ## Setup
 
@@ -31,8 +31,10 @@ cd haven-community/bots/base64
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
 
 ## Configuration (`.env`)
 
@@ -49,7 +51,7 @@ node server.js
 
 ## Behaviour
 
-- Results are public in the channel — do not paste secrets you care about.
+- Results are public in the channel, so do not paste secrets you care about.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

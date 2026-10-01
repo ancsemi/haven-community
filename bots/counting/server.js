@@ -1,4 +1,4 @@
-// counting — Haven community bot
+// counting: Haven community bot
 //
 // Listens for message events and expects sequential integers. Wrong numbers
 // post a correction and either reset the count or freeze (STRICT mode).
@@ -22,11 +22,25 @@ const STRICT = String(process.env.STRICT || 'false').toLowerCase() === 'true';
 const START_AT = Math.max(0, parseInt(process.env.START_AT || '0', 10) || 0);
 const ALLOW_BOTS = String(process.env.ALLOW_BOTS || 'false').toLowerCase() === 'true';
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
+// Haven user ids with admin rights in this bot. Empty = nobody.
+const ADMIN_USER_IDS = new Set(
+  (process.env.ADMIN_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
+}
+if (!ADMIN_USER_IDS.size) {
+  console.warn('WARNING: ADMIN_USER_IDS is empty, so /count reset is refused for everyone.');
+}
+
+function isAdmin(user) {
+  return !!user && user.id != null && ADMIN_USER_IDS.has(String(user.id));
 }
 
 function loadState() {
@@ -88,6 +102,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -116,6 +131,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -158,7 +174,7 @@ function statusText() {
     `High score: **${state.highScore}**`,
   ];
   if (state.lastUsername) lines.push(`Last: ${state.lastUsername}`);
-  if (state.frozen) lines.push(`⚠️ **Frozen** (STRICT) — use \`/count unfreeze\``);
+  if (state.frozen) lines.push(`⚠️ **Frozen** (STRICT): use \`/count unfreeze\``);
   lines.push(`Mode: ${STRICT ? 'STRICT (freeze on fail)' : 'reset on fail'}`);
   return lines.join('\n');
 }
@@ -214,7 +230,7 @@ async function handleMessage(payload) {
 
   // Light milestone cheers
   if (n > 0 && n % 100 === 0) {
-    await postToHaven(`🎉 Milestone! Count reached **${n}** — keep going!`);
+    await postToHaven(`🎉 Milestone! Count reached **${n}**, keep going!`);
   }
 
   return { ok: true, current: n };
@@ -224,6 +240,8 @@ async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
   if (command !== 'count') return { ignored: true };
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
 
   const sub = (args.split(/\s+/)[0] || 'status').toLowerCase();
 
@@ -233,6 +251,14 @@ async function handleSlash(payload) {
   }
 
   if (sub === 'reset') {
+    if (!isAdmin(user)) {
+      await postToHaven(
+        ADMIN_USER_IDS.size
+          ? '⛔ Only bot admins (ADMIN_USER_IDS) can reset the count.'
+          : '⛔ Resetting is turned off until the bot host sets ADMIN_USER_IDS.'
+      );
+      return;
+    }
     state.current = START_AT;
     state.lastUserId = null;
     state.lastUsername = '';
@@ -312,8 +338,9 @@ app.post('/haven', async (req, res) => {
       if (result && result.ignored) return res.json({ ignored: true });
       return res.json({ ok: true });
     } catch (err) {
+      // Answer 200 anyway: anything that already ran should not run twice.
       console.error('slash handler error:', err.message);
-      return res.status(500).json({ error: err.message });
+      return res.json({ ok: false });
     }
   }
 
@@ -322,8 +349,10 @@ app.post('/haven', async (req, res) => {
       const result = await handleMessage(payload);
       return res.json(result);
     } catch (err) {
+      // Answer 200 anyway: Haven retries a message event after a 5xx, which
+      // would repeat whatever already ran.
       console.error('message handler error:', err.message);
-      return res.status(500).json({ error: err.message });
+      return res.json({ ok: false });
     }
   }
 

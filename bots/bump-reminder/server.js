@@ -1,4 +1,4 @@
-// bump-reminder — Haven community bot
+// bump-reminder: Haven community bot
 //
 // /bump records a timestamp; reminds the channel every BUMP_EVERY_HOURS
 // (Disboard-style). Also /bump status and /bump set hours.
@@ -32,11 +32,23 @@ const BUMP_ACK_MESSAGE =
   process.env.BUMP_ACK_MESSAGE ||
   '✅ Bump recorded. Next reminder in about **{hours}h** (around {when}).';
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
+// POST /remind is off unless this is set.
+const REMIND_TOKEN = (process.env.REMIND_TOKEN || '').trim();
+// Haven user ids allowed to change the interval with /bump set. Empty = nobody.
+const ADMIN_USER_IDS = new Set(
+  (process.env.ADMIN_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
+}
+if (!ADMIN_USER_IDS.size) {
+  console.warn('WARNING: ADMIN_USER_IDS is empty, so /bump set is refused for everyone.');
 }
 
 function loadState() {
@@ -83,6 +95,19 @@ function verifySignature(rawBody, headerValue) {
   }
 }
 
+// Checks "Authorization: Bearer <token>" in constant time.
+function bearerMatches(req, expected) {
+  const header = req.get('Authorization') || '';
+  const given = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function isAdmin(user) {
+  return !!user && user.id != null && ADMIN_USER_IDS.has(String(user.id));
+}
+
 function webhookToken() {
   if (HAVEN_WEBHOOK_TOKEN) return HAVEN_WEBHOOK_TOKEN;
   const m = HAVEN_WEBHOOK_URL.match(/\/api\/webhooks\/([a-f0-9]{64})/i);
@@ -97,6 +122,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -123,6 +149,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register failed: ${res.status}`);
@@ -207,7 +234,8 @@ async function handleSlash(payload) {
   if (command !== 'bump') return { ignored: true };
 
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
   const parts = args.split(/\s+/).filter(Boolean);
   const sub = (parts[0] || '').toLowerCase();
 
@@ -222,9 +250,17 @@ async function handleSlash(payload) {
   }
 
   if (sub === 'set' || sub === 'hours' || sub === 'interval') {
+    if (!isAdmin(user)) {
+      await postToHaven(
+        ADMIN_USER_IDS.size
+          ? '⛔ Only bot admins (ADMIN_USER_IDS) can change the reminder interval.'
+          : '⛔ Changing the interval is turned off until the bot host sets ADMIN_USER_IDS.'
+      );
+      return;
+    }
     const n = parseFloat(parts[1]);
     if (!Number.isFinite(n) || n < 0.25 || n > 168) {
-      await postToHaven('Usage: `/bump set <hours>` (0.25–168)');
+      await postToHaven('Usage: `/bump set <hours>` (0.25 to 168)');
       return;
     }
     state.everyHours = n;
@@ -263,7 +299,10 @@ app.get('/health', (_req, res) =>
     lastRemindAt: state.lastRemindAt,
   })
 );
-app.post('/remind', async (_req, res) => {
+// Manual trigger for testing. Needs REMIND_TOKEN as a Bearer token.
+app.post('/remind', async (req, res) => {
+  if (!REMIND_TOKEN) return res.status(404).json({ error: 'disabled: set REMIND_TOKEN to enable' });
+  if (!bearerMatches(req, REMIND_TOKEN)) return res.status(401).json({ error: 'unauthorized' });
   try {
     await postToHaven(REMIND_MESSAGE.slice(0, 4000));
     state.lastRemindAt = Date.now();

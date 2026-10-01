@@ -1,6 +1,7 @@
-// base64 — Haven community bot
+// base64: Haven community bot
 //
-// /b64 encode|decode <text> — Base64 encode/decode UTF-8 text.
+// /encode <text> and /decode <base64>: Base64 encode or decode UTF-8 text.
+// Haven only routes command names made of letters, so /b64 would never arrive.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -52,6 +53,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -64,14 +66,15 @@ async function registerCommands() {
   if (!token) return;
   const url = `${new URL(HAVEN_WEBHOOK_URL).origin}/api/webhooks/${token}/commands`;
   const cmds = [
-    { command: 'b64', description: 'Base64: /b64 encode|decode <text>' },
-    { command: 'base64', description: 'Alias for /b64' },
+    { command: 'encode', description: 'Base64 encode: /encode <text>' },
+    { command: 'decode', description: 'Base64 decode: /decode <base64>' },
   ];
   for (const body of cmds) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -117,42 +120,18 @@ function decodeText(b64) {
 
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
-  if (command !== 'b64' && command !== 'base64') return { ignored: true };
+  if (command !== 'encode' && command !== 'decode') return { ignored: true };
 
   const args = String(payload.args || '').trim();
   if (!args || args.toLowerCase() === 'help') {
     await postToHaven(
-      'Usage: `/b64 encode <text>` · `/b64 decode <base64>` · shortcuts: `/b64 e …` `/b64 d …`'
+      'Usage: `/encode <text>` · `/decode <base64>` (if the Base64 contains `/`, swap each one for `_`)'
     );
     return;
   }
 
-  const parts = args.split(/\s+/);
-  let op = parts[0].toLowerCase();
-  let rest = parts.slice(1).join(' ').trim();
-
-  // Allow /b64 <text> as encode if no op keyword
-  const encodeAliases = new Set(['encode', 'enc', 'e', 'to', 'in']);
-  const decodeAliases = new Set(['decode', 'dec', 'd', 'from', 'out']);
-
-  if (!encodeAliases.has(op) && !decodeAliases.has(op)) {
-    // entire args as encode payload
-    op = 'encode';
-    rest = args;
-  } else if (encodeAliases.has(op)) {
-    op = 'encode';
-  } else {
-    op = 'decode';
-  }
-
-  if (!rest) {
-    await postToHaven(
-      op === 'encode'
-        ? 'Usage: `/b64 encode <text>`'
-        : 'Usage: `/b64 decode <base64>`'
-    );
-    return;
-  }
+  const op = command;
+  const rest = args;
 
   if (rest.length > MAX_INPUT) {
     await postToHaven(`❌ Input too long (max ${MAX_INPUT} characters).`);

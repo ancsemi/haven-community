@@ -1,7 +1,8 @@
-// afk — Haven community bot
+// afk: Haven community bot
 //
-// Slash /afk [reason] and /back. On message events, if an AFK username is
-// mentioned, announce that they are AFK (with optional reason).
+// Slash /away [reason] and /back. Haven keeps /afk for itself, so the bot uses
+// /away. On message events, if an AFK username is mentioned, announce that
+// they are AFK (with optional reason).
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -86,6 +87,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -99,7 +101,7 @@ async function registerCommands() {
   const origin = new URL(HAVEN_WEBHOOK_URL).origin;
   const base = `${origin}/api/webhooks/${token}/commands`;
   const cmds = [
-    { command: 'afk', description: 'Mark yourself AFK with optional reason' },
+    { command: 'away', description: 'Mark yourself AFK with an optional reason' },
     { command: 'back', description: 'Clear your AFK status' },
   ];
   for (const body of cmds) {
@@ -107,6 +109,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -163,7 +166,7 @@ function formatDuration(ms) {
 function afkMessage(entry) {
   const name = displayName(entry);
   const ago = entry.since ? formatDuration(Date.now() - entry.since) : '?';
-  const reason = entry.reason ? ` — ${entry.reason}` : '';
+  const reason = entry.reason ? `: ${entry.reason}` : '';
   return `💤 **${name}** is AFK${reason} _(for ${ago})_`;
 }
 
@@ -241,12 +244,13 @@ async function handleMessage(payload) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
 
-  if (command === 'afk') {
+  if (command === 'away') {
     try {
       const entry = setAfk(user, args);
-      const reason = entry.reason ? ` — ${entry.reason}` : '';
+      const reason = entry.reason ? `: ${entry.reason}` : '';
       await postToHaven(`💤 **${displayName(entry)}** is now AFK${reason}`);
     } catch (err) {
       await postToHaven(`❌ ${err.message}`);
@@ -313,8 +317,9 @@ app.post('/haven', async (req, res) => {
       if (result && result.ignored) return res.json({ ignored: true });
       return res.json({ ok: true });
     } catch (err) {
+      // Answer 200 anyway: anything that already ran should not run twice.
       console.error('slash handler error:', err.message);
-      return res.status(500).json({ error: err.message });
+      return res.json({ ok: false });
     }
   }
 
@@ -323,8 +328,10 @@ app.post('/haven', async (req, res) => {
       const result = await handleMessage(payload);
       return res.json(result);
     } catch (err) {
+      // Answer 200 anyway: Haven retries a message event after a 5xx, which
+      // would repeat whatever already ran.
       console.error('message handler error:', err.message);
-      return res.status(500).json({ error: err.message });
+      return res.json({ ok: false });
     }
   }
 

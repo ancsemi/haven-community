@@ -1,4 +1,4 @@
-// confessions — Haven community bot
+// confessions: Haven community bot
 //
 // Slash /confess <text> posts anonymously as Confession Bot (no author name).
 //
@@ -24,7 +24,8 @@ if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   process.exit(1);
 }
 
-// In-memory cooldowns only (no author stored in posts)
+// Cooldowns keyed by Haven user id. In memory only: never logged, posted or
+// written to disk, and gone on restart.
 const cooldowns = new Map();
 
 function verifySignature(rawBody, headerValue) {
@@ -50,17 +51,22 @@ function webhookToken() {
 
 function actorKey(user) {
   if (user && user.id != null && user.id !== '') return `id:${user.id}`;
-  const name = (user && (user.username || user.displayName)) || '';
-  return name ? `name:${String(name).toLowerCase()}` : 'anon';
+  return 'anon';
 }
 
-async function postToHaven(content) {
+// With recipientId the post is ephemeral: only that user sees it.
+async function postToHaven(content, recipientId) {
   const body = { content, username: HAVEN_USERNAME };
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -79,6 +85,7 @@ async function registerCommands() {
       command: 'confess',
       description: 'Post an anonymous confession',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -93,6 +100,11 @@ function checkCooldown(key) {
   const now = Date.now();
   const wait = COOLDOWN_SEC * 1000 - (now - last);
   if (wait > 0) return Math.ceil(wait / 1000);
+  if (cooldowns.size > 1000) {
+    for (const [k, t] of cooldowns) {
+      if (now - t >= COOLDOWN_SEC * 1000) cooldowns.delete(k);
+    }
+  }
   cooldowns.set(key, now);
   return null;
 }
@@ -102,18 +114,20 @@ async function handleSlash(payload) {
   if (command !== 'confess') return { ignored: true };
 
   const text = String(payload.args || '').trim().slice(0, MAX_LENGTH);
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
+  const recipient = user.id != null && user.id !== '' ? user.id : null;
 
   if (!text) {
-    await postToHaven('Usage: `/confess <text>` — your name is **not** shown.');
+    await postToHaven('Usage: `/confess <text>`. Your name is **not** shown.', recipient);
     return;
   }
 
   const key = actorKey(user);
   const wait = checkCooldown(key);
   if (wait != null) {
-    // Still post as Confession Bot so we don't leak identity; keep message generic
-    await postToHaven(`⏳ Please wait **${wait}s** before another confession.`);
+    // Private notice, so nobody else learns who is trying to confess.
+    await postToHaven(`⏳ Please wait **${wait}s** before another confession.`, recipient);
     return;
   }
 

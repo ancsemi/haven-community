@@ -32,8 +32,10 @@ cd haven-community/bots/animal-pics
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
 
 ## Configuration (`.env`)
 
@@ -52,6 +54,7 @@ node server.js
 
 - **Cats:** [cataas.com](https://cataas.com/) direct image URL (cache-busted), or [TheCatAPI](https://thecatapi.com/) public search without a key.
 - **Dogs:** [random.dog](https://random.dog/) JSON (skips video files, retries), with [dog.ceo](https://dog.ceo/) fallback; optional [place.dog](https://place.dog/).
+- Calls to the image APIs give up after 10 seconds.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

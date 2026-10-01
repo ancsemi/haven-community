@@ -8,7 +8,7 @@ Disboard-style bump timer for Haven. After someone runs `/bump`, the bot waits `
 |---------|-------------|
 | `/bump` | Record that you just bumped |
 | `/bump status` | Show last bump and next reminder |
-| `/bump set <hours>` | Change interval (persisted in state) |
+| `/bump set <hours>` | Change interval (persisted in state). Only ids in `ADMIN_USER_IDS`; refused for everyone while that is empty |
 
 ## Setup
 
@@ -28,10 +28,12 @@ cd haven-community/bots/bump-reminder
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
 
-Keep the process running so the interval checker can fire. Manual remind: `POST /remind`.
+Needs Node 20.6 or newer (`--env-file` is what loads your `.env`). If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server, otherwise Haven will not deliver callbacks to it.
+
+Keep the process running so the interval checker can fire. To post a reminder by hand, set `REMIND_TOKEN` and send `POST /remind` with the header `Authorization: Bearer <REMIND_TOKEN>`. Without `REMIND_TOKEN` that endpoint is turned off.
 
 ## Configuration (`.env`)
 
@@ -46,6 +48,8 @@ Keep the process running so the interval checker can fire. Manual remind: `POST 
 | `BUMP_ACK_MESSAGE` | no | Reply after `/bump` (`{hours}` `{when}` `{user}`) |
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
+| `ADMIN_USER_IDS` | no | Comma-separated Haven user ids allowed to use `/bump set` (empty = nobody, the bot warns at startup) |
+| `REMIND_TOKEN` | no | Enables `POST /remind`; send it as `Authorization: Bearer <token>` (unset = endpoint off) |
 | `HAVEN_WEBHOOK_TOKEN` | no | Slash registration token |
 | `PORT` | no | HTTP port (default `3000`) |
 

@@ -1,4 +1,4 @@
-// birthday — Haven community bot
+// birthday: Haven community bot
 //
 // /birthday set MM-DD, /birthday remove, /birthday list, /birthday when [user]
 // Daily check in TIMEZONE posts happy-birthday list once per day.
@@ -22,11 +22,15 @@ const CHECK_INTERVAL_MS = Math.max(
   60_000,
   parseInt(process.env.CHECK_INTERVAL_MS || String(15 * 60 * 1000), 10) || 15 * 60 * 1000
 );
-const ANNOUNCE_HOUR = Math.max(0, Math.min(23, parseInt(process.env.ANNOUNCE_HOUR || '9', 10) || 9));
+// Parsed so that 0 (midnight) is honoured instead of falling back to 9.
+const ANNOUNCE_HOUR_RAW = parseInt(process.env.ANNOUNCE_HOUR ?? '9', 10);
+const ANNOUNCE_HOUR = Number.isInteger(ANNOUNCE_HOUR_RAW) ? Math.max(0, Math.min(23, ANNOUNCE_HOUR_RAW)) : 9;
 const MESSAGE_TEMPLATE =
   process.env.MESSAGE_TEMPLATE ||
   '🎂 **Happy birthday!**\n{names}\n\nHave an awesome day!';
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
+// POST /announce is off unless this is set.
+const ANNOUNCE_TOKEN = (process.env.ANNOUNCE_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
@@ -70,6 +74,15 @@ function verifySignature(rawBody, headerValue) {
   }
 }
 
+// Checks "Authorization: Bearer <token>" in constant time.
+function bearerMatches(req, expected) {
+  const header = req.get('Authorization') || '';
+  const given = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function webhookToken() {
   if (HAVEN_WEBHOOK_TOKEN) return HAVEN_WEBHOOK_TOKEN;
   const m = HAVEN_WEBHOOK_URL.match(/\/api\/webhooks\/([a-f0-9]{64})/i);
@@ -84,6 +97,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -113,6 +127,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register failed: ${res.status}`);
@@ -173,7 +188,7 @@ function formatList() {
     .filter(Boolean)
     .sort((a, b) => a.mmdd.localeCompare(b.mmdd) || displayName(a).localeCompare(displayName(b)));
   if (!list.length) return '🎂 **Birthdays**\n_None set. Use `/birthday set MM-DD`._';
-  const lines = list.map((b) => `• **${displayName(b)}** — ${b.mmdd}`);
+  const lines = list.map((b) => `• **${displayName(b)}**: ${b.mmdd}`);
   return `🎂 **Birthdays** (${list.length}) · TZ \`${TIMEZONE}\`\n${lines.join('\n')}`.slice(0, 4000);
 }
 
@@ -213,7 +228,8 @@ async function handleSlash(payload) {
   if (command !== 'birthday') return { ignored: true };
 
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author.
+  const user = payload.author || {};
   const parts = args.split(/\s+/).filter(Boolean);
   const sub = (parts[0] || '').toLowerCase();
 
@@ -279,7 +295,7 @@ async function handleSlash(payload) {
         await postToHaven('No birthday on file for you. Set one with `/birthday set MM-DD`.');
         return;
       }
-      await postToHaven(`🎂 **${displayName(mine)}** — ${mine.mmdd}`);
+      await postToHaven(`🎂 **${displayName(mine)}**: ${mine.mmdd}`);
       return;
     }
     const found = Object.values(state.birthdays).find((b) => {
@@ -291,7 +307,7 @@ async function handleSlash(payload) {
       await postToHaven(`No birthday found for \`${q}\`.`);
       return;
     }
-    await postToHaven(`🎂 **${displayName(found)}** — ${found.mmdd}`);
+    await postToHaven(`🎂 **${displayName(found)}**: ${found.mmdd}`);
     return;
   }
 
@@ -341,7 +357,10 @@ app.get('/health', (_req, res) => {
     lastAnnounceDate: state.lastAnnounceDate,
   });
 });
-app.post('/announce', async (_req, res) => {
+// Manual trigger for testing. Needs ANNOUNCE_TOKEN as a Bearer token.
+app.post('/announce', async (req, res) => {
+  if (!ANNOUNCE_TOKEN) return res.status(404).json({ error: 'disabled: set ANNOUNCE_TOKEN to enable' });
+  if (!bearerMatches(req, ANNOUNCE_TOKEN)) return res.status(401).json({ error: 'unauthorized' });
   try {
     state.lastAnnounceDate = '';
     await maybeAnnounce();

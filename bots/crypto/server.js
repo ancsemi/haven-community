@@ -1,4 +1,4 @@
-// crypto — Haven community bot
+// crypto: Haven community bot
 //
 // Slash /crypto <symbol> via CoinGecko simple price API (no API key).
 //
@@ -34,7 +34,7 @@ const SYMBOL_MAP = {
   ada: 'cardano',
   dot: 'polkadot',
   avax: 'avalanche-2',
-  matic: 'matic-network',
+  matic: 'polygon-ecosystem-token', // MATIC was migrated to POL
   pol: 'polygon-ecosystem-token',
   link: 'chainlink',
   ltc: 'litecoin',
@@ -87,6 +87,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -105,6 +106,7 @@ async function registerCommands() {
       command: 'crypto',
       description: 'Crypto price: /crypto <symbol or id>',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);

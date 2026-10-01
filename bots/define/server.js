@@ -1,4 +1,4 @@
-// define — Haven community bot
+// define: Haven community bot
 //
 // Slash /define <word> via Free Dictionary API (api.dictionaryapi.dev).
 //
@@ -53,6 +53,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -71,6 +72,7 @@ async function registerCommands() {
       command: 'define',
       description: 'Define a word: /define <word>',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);

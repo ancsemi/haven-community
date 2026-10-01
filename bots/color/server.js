@@ -1,6 +1,6 @@
-// color — Haven community bot
+// color: Haven community bot
 //
-// /color #RRGGBB (or rgb/hsl) — show RGB/HSL breakdown as text.
+// /color #RRGGBB (or rgb(r, g, b)): show hex, RGB, HSL and HSV breakdown as text.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -50,6 +50,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -70,6 +71,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -134,7 +136,7 @@ function parseColor(raw) {
   if (!s) return null;
   if (s.startsWith('#') || /^[0-9a-f]{3,8}$/i.test(s)) return parseHex(s);
   if (/^rgba?\(/i.test(s) || /^\d+\s*[, ]\s*\d+/.test(s)) return parseRgb(s);
-  // named? skip — only hex/rgb
+  // Named colors are not supported, only hex and rgb.
   if (!s.startsWith('#')) {
     const hex = parseHex(s);
     if (hex) return hex;
@@ -248,9 +250,6 @@ function formatColor(c) {
     `**Contrast:** vs white **${onWhite}:1** · vs black **${onBlack}:1**`,
     `**Luminance:** \`${Math.round(lum * 1000) / 1000}\``
   );
-  // Text swatch (unicode blocks) — no image API needed
-  lines.push('');
-  lines.push(`\`${hex}\` ████  (preview depends on client font color support)`);
   return lines.join('\n').slice(0, 4000);
 }
 

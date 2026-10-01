@@ -1,6 +1,6 @@
-// animal-pics — Haven community bot
+// animal-pics: Haven community bot
 //
-// Slash /cat and /dog — random animal image URLs from public endpoints
+// Slash /cat and /dog: random animal image URLs from public endpoints
 // (cataas, thecatapi without key, random.dog, place.dog).
 //
 // See README.md for setup. Configuration is via environment variables only.
@@ -53,6 +53,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -74,6 +75,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -94,6 +96,7 @@ async function fetchJson(url) {
       Accept: 'application/json',
       'User-Agent': 'haven-community-animal-pics (https://github.com/Amnibro/haven-community)',
     },
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
   return res.json();
@@ -141,7 +144,7 @@ async function fetchDog() {
     throw new Error('dog.ceo returned no image');
   }
 
-  // Default: random.dog — retry a few times to avoid mp4/webm
+  // Default: random.dog, retrying a few times to avoid mp4/webm
   let lastErr;
   for (let i = 0; i < 6; i++) {
     try {
@@ -150,9 +153,11 @@ async function fetchDog() {
       if (url && isImageUrl(url)) {
         return { species: 'dog', url, source: 'random.dog' };
       }
-      // video — try again
+      // video, try again
     } catch (err) {
       lastErr = err;
+      // A host that timed out is unlikely to answer the next try either.
+      if (err.name === 'TimeoutError') break;
     }
   }
 
