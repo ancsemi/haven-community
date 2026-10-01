@@ -1,7 +1,8 @@
 // moderation — Haven community bot
 //
 // Slash /kick /ban /unban /mute /unmute wrapping Haven bot moderation REST.
-// Requires can_moderate on the webhook bot. Optional ALLOWED_USER_IDS gate.
+// Requires can_moderate on the webhook bot. ALLOWED_USER_IDS is required:
+// with no ids set, every moderation command is refused.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -53,7 +54,8 @@ function originBase() {
 }
 
 function isAllowed(user) {
-  if (!ALLOWED_USER_IDS.length) return true;
+  // Fail closed: an empty allowlist means nobody, not everybody.
+  if (!ALLOWED_USER_IDS.length) return false;
   if (!user || user.id == null) return false;
   return ALLOWED_USER_IDS.some((id) => String(id) === String(user.id));
 }
@@ -66,6 +68,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -81,6 +84,7 @@ async function modAction(action, payload) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(10000),
   });
   const text = await res.text().catch(() => '');
   if (!res.ok) {
@@ -111,6 +115,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -152,14 +157,18 @@ function parseModArgs(args, { withDuration } = {}) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
-  const actor = user.username || user.displayName || 'mod';
+  const user = payload.author || {};
+  const actor = user.username || user.displayName || `user ${user.id != null ? user.id : 'unknown'}`;
 
   const known = new Set(['kick', 'ban', 'unban', 'mute', 'unmute']);
   if (!known.has(command)) return { ignored: true };
 
   if (!isAllowed(user)) {
-    await postToHaven('❌ You are not allowed to use moderation commands.');
+    if (!ALLOWED_USER_IDS.length) {
+      await postToHaven('❌ Moderation commands are locked: the bot host has not set `ALLOWED_USER_IDS` yet.');
+    } else {
+      await postToHaven('❌ You are not allowed to use moderation commands.');
+    }
     return;
   }
 
@@ -183,7 +192,13 @@ async function handleSlash(payload) {
 
   try {
     if (command === 'kick') {
-      await modAction('kick', { userId, reason: fullReason });
+      // Haven kicks from one channel, so it needs the channel the command ran in.
+      const channelCode = payload.channelCode;
+      if (!channelCode) {
+        await postToHaven('❌ kick failed: Haven did not say which channel this ran in.');
+        return;
+      }
+      await modAction('kick', { userId, channelCode, reason: fullReason });
       await postToHaven(`👢 **Kicked** user \`${userId}\`\nReason: ${reason}\n_by ${actor}_`);
       return;
     }
@@ -221,7 +236,7 @@ app.get('/', (_req, res) => {
   res
     .type('text/plain')
     .send(
-      `moderation bot running. defaultMuteMin=${DEFAULT_MUTE_MIN} allowlist=${ALLOWED_USER_IDS.length || 'any'}`
+      `moderation bot running. defaultMuteMin=${DEFAULT_MUTE_MIN} allowlist=${ALLOWED_USER_IDS.length || 'empty (all commands refused)'}`
     );
 });
 app.get('/health', (_req, res) =>
@@ -273,9 +288,10 @@ app.post('/haven', async (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`moderation bot listening on :${PORT}`);
-  console.log(
-    `  defaultMuteMin=${DEFAULT_MUTE_MIN} allowlist=${ALLOWED_USER_IDS.length || 'any (open)'}`
-  );
+  console.log(`  defaultMuteMin=${DEFAULT_MUTE_MIN} allowlist=${ALLOWED_USER_IDS.length} id(s)`);
+  if (!ALLOWED_USER_IDS.length) {
+    console.warn('  WARNING: ALLOWED_USER_IDS is empty, so every moderation command will be refused. Set it to your moderators\' Haven user ids.');
+  }
   try {
     await registerCommands();
   } catch (e) {

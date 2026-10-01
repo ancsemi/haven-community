@@ -7,7 +7,8 @@ Polls [Hacker News](https://news.ycombinator.com/) **top stories** via the publi
 - Uses `https://hacker-news.firebaseio.com/v0/topstories.json` + per-item fetch.
 - First poll **primes** seen story ids (no posts).
 - Later polls post unseen stories with `score >= SCORE_MIN` (highest score first, capped by `MAX_POSTS_PER_POLL`).
-- Stories that appear in the top list below the threshold are still marked seen so they don’t spam later if they climb after leaving the “new to us” set. Raise `SCORE_MIN` carefully.
+- Only stories that were actually posted are marked seen. A story below `SCORE_MIN` is checked again on later polls, so it still gets posted if it climbs past the threshold while it is in the top `TOP_N`.
+- Polls never overlap: if a poll is still running when the next one is due, the new one is skipped.
 
 ## Setup
 
@@ -23,8 +24,10 @@ cd haven-community/bots/hackernews
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
 
 Host needs outbound HTTPS to `hacker-news.firebaseio.com`.
 
@@ -41,6 +44,7 @@ Host needs outbound HTTPS to `hacker-news.firebaseio.com`.
 | `MAX_POSTS_PER_POLL` | no | Max Haven posts per cycle (default `5`) |
 | `STATE_FILE` | no | Seen ids path (default `./data/hackernews-state.json`) |
 | `POST_MESSAGE` | no | Template: `{title}` `{url}` `{score}` `{by}` `{comments}` `{id}` |
+| `POLL_TOKEN` | no | Enables `POST /poll`; callers must send `Authorization: Bearer <token>` (or `X-Poll-Token`). Unset means the endpoint is off |
 | `PORT` | no | HTTP port (default `3000`) |
 
 ## Endpoints
@@ -49,7 +53,7 @@ Host needs outbound HTTPS to `hacker-news.firebaseio.com`.
 |------|-------------|
 | `GET /` | Human status |
 | `GET /health` | JSON health |
-| `POST /poll` | Force a poll cycle |
+| `POST /poll` | Force a poll cycle (needs `POLL_TOKEN`) |
 
 ## License
 

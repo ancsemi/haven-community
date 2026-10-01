@@ -38,8 +38,12 @@ cd haven-community/bots/lastfm
 npm install
 cp .env.example .env
 # set LASTFM_API_KEY, HAVEN_WEBHOOK_URL, CALLBACK_SECRET
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 

@@ -79,6 +79,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -107,6 +108,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -198,7 +200,7 @@ async function handleSlash(payload) {
   if (command !== 'np' && command !== 'lastfm') return { ignored: true };
 
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  const user = payload.author || {};
   const parts = args.split(/\s+/).filter(Boolean);
   const sub = (parts[0] || '').toLowerCase();
 

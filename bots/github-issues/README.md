@@ -38,8 +38,10 @@ cd haven-community/bots/github-issues
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
 
 ### 4. Configure the GitHub webhook
 

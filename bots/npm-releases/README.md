@@ -27,10 +27,12 @@ cd haven-community/bots/npm-releases
 npm install
 cp .env.example .env
 # set HAVEN_WEBHOOK_URL and PACKAGE_NAMES
-node server.js
+node --env-file=.env server.js
 ```
 
-No outbound public URL is required (poll-only), unless you want `/health` or manual `POST /poll`.
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+No outbound public URL is required (poll-only), unless you want `/health` or manual `POST /poll` (which needs `POLL_TOKEN`).
 
 ## Configuration (`.env`)
 
@@ -45,13 +47,16 @@ No outbound public URL is required (poll-only), unless you want `/health` or man
 | `STATE_FILE` | no | JSON file of last seen versions (default `./data/npm-releases-state.json`) |
 | `REGISTRY_BASE` | no | Registry root (default `https://registry.npmjs.org`) |
 | `POST_MESSAGE` | no | Template with `{package}` `{version}` `{url}` `{time}` `{description}` |
+| `POLL_TOKEN` | no | Enables `POST /poll`; callers must send `Authorization: Bearer <token>` (or `X-Poll-Token`). Unset means the endpoint is off |
 | `PORT` | no | HTTP port for health/poll (default `3000`) |
 
 ## Behaviour
 
 - Compares stored version vs `dist-tags.latest` from the registry metadata document.
 - Versions containing a pre-release hyphen (e.g. `1.0.0-rc.1`) are skipped unless `INCLUDE_PRERELEASES=true` (state still advances).
-- Manual refresh: `POST /poll`.
+- A version is only recorded as seen after it was posted, so a failed post is retried on the next poll.
+- Polls never overlap: if a poll is still running when the next one is due, the new one is skipped.
+- Manual refresh: `POST /poll` with `Authorization: Bearer <POLL_TOKEN>`. The endpoint is off when `POLL_TOKEN` is unset.
 - Health: `GET /health` returns packages and last known versions.
 
 ## License

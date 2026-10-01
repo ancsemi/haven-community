@@ -1,8 +1,8 @@
 // echo-once — Haven community bot
 //
-// /echo <text> re-posts text. If a recipient_id is available on the slash
-// payload (or FORCE_EPHEMERAL), posts with ephemeral:true + recipient_id for
-// a private-style reply; otherwise public channel post.
+// /echo <text> re-posts text. With PREFER_EPHEMERAL (default) or
+// FORCE_EPHEMERAL, the reply goes privately to the caller (payload.author.id)
+// via ephemeral:true + recipient_id; otherwise it is a public channel post.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -70,16 +70,10 @@ async function postToHaven(content, opts = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    // If ephemeral unsupported, fall back to public once
-    if (wantEphemeral && (res.status === 400 || res.status === 422)) {
-      console.warn(
-        `[${new Date().toISOString()}] ephemeral post failed (${res.status}); falling back to public`
-      );
-      return postToHaven(content, { ephemeral: false });
-    }
     throw new Error(`Haven responded ${res.status}: ${text.slice(0, 300)}`);
   }
   return { ephemeral: wantEphemeral };
@@ -90,14 +84,14 @@ async function registerCommands() {
   if (!token) return;
   const url = `${new URL(HAVEN_WEBHOOK_URL).origin}/api/webhooks/${token}/commands`;
   const cmds = [
-    { command: 'echo', description: 'Echo text (ephemeral if recipient known)' },
-    { command: 'say-echo', description: 'Alias for /echo' },
+    { command: 'echo', description: 'Echo text back to you privately' },
   ];
   for (const body of cmds) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -108,42 +102,46 @@ async function registerCommands() {
 }
 
 function extractRecipientId(payload) {
-  const user = payload.user || {};
-  const candidates = [
-    payload.recipient_id,
-    payload.recipientId,
-    user.id,
-    payload.user_id,
-    payload.userId,
-    payload.member && payload.member.user && payload.member.user.id,
-  ];
-  for (const c of candidates) {
-    if (c != null && c !== '') return c;
-  }
-  return null;
+  const author = payload.author || {};
+  return author.id != null && author.id !== '' ? author.id : null;
 }
 
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
-  if (command !== 'echo' && command !== 'say-echo') return { ignored: true };
-
-  const text = String(payload.args || '').trim().slice(0, MAX_LENGTH);
-  if (!text) {
-    await postToHaven(
-      'Usage: `/echo <text>` — private/ephemeral when `recipient_id` is available, else public.'
-    );
-    return;
-  }
+  if (command !== 'echo') return { ignored: true };
 
   const recipientId = extractRecipientId(payload);
   const useEphemeral =
     FORCE_EPHEMERAL || (PREFER_EPHEMERAL && recipientId != null);
 
+  const text = String(payload.args || '').trim().slice(0, MAX_LENGTH);
+  if (!text) {
+    await postToHaven('Usage: `/echo <text>`', {
+      ephemeral: useEphemeral,
+      recipientId,
+    });
+    return;
+  }
+
+  if (useEphemeral && recipientId == null) {
+    await postToHaven('Could not send a private echo: the command did not say who sent it.');
+    return;
+  }
+
   const content = (PREFIX ? `${PREFIX}${text}` : text).slice(0, 4000);
-  const result = await postToHaven(content, {
-    ephemeral: useEphemeral,
-    recipientId,
-  });
+  let result;
+  try {
+    result = await postToHaven(content, {
+      ephemeral: useEphemeral,
+      recipientId,
+    });
+  } catch (err) {
+    // Never repost a private echo in public. Say it failed instead.
+    if (!useEphemeral) throw err;
+    console.warn(`[${new Date().toISOString()}] private echo failed: ${err.message}`);
+    await postToHaven('Could not deliver a private echo. Please try again later.');
+    return;
+  }
   console.log(
     `[${new Date().toISOString()}] echo len=${text.length} ephemeral=${!!result.ephemeral} recipient=${recipientId || 'none'}`
   );

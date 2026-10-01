@@ -25,7 +25,7 @@ If you've built something useful for Haven, please PR it in. See [`CONTRIBUTING.
 | [`twitch-live`](bots/twitch-live/) | Announces when watched Twitch streamers go live (Helix API). | Node.js | [@Amnibro](https://github.com/Amnibro) |
 | [`youtube`](bots/youtube/) | Posts new YouTube uploads via channel RSS (no API key). | Node.js | [@Amnibro](https://github.com/Amnibro) |
 | [`polls`](bots/polls/) | Create polls with `/poll` and vote with `/vote`; results tallies. | Node.js | [@Amnibro](https://github.com/Amnibro) |
-| [`giveaway`](bots/giveaway/) | Timed giveaways: `/giveaway start|enter|end` with random winner. | Node.js | [@Amnibro](https://github.com/Amnibro) |
+| [`giveaway`](bots/giveaway/) | Timed giveaways: `/giveaway start\|enter\|end` with random winner. | Node.js | [@Amnibro](https://github.com/Amnibro) |
 | [`uptime`](bots/uptime/) | Poll URLs and announce up/down flips with latency. | Node.js | [@Amnibro](https://github.com/Amnibro) |
 | [`translate`](bots/translate/) | Slash `/translate` via LibreTranslate or MyMemory fallback. | Node.js | [@Amnibro](https://github.com/Amnibro) |
 | [`weather`](bots/weather/) | Slash `/weather` using Open-Meteo geocoding + forecast (no key). | Node.js | [@Amnibro](https://github.com/Amnibro) |

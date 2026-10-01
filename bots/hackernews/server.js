@@ -7,6 +7,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -15,12 +16,15 @@ const HAVEN_WEBHOOK_URL = process.env.HAVEN_WEBHOOK_URL;
 const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const POLL_INTERVAL_SEC = Math.max(60, parseInt(process.env.POLL_INTERVAL_SEC || '300', 10) || 300);
-const SCORE_MIN = Math.max(0, parseInt(process.env.SCORE_MIN || '100', 10) || 100);
+const SCORE_MIN_RAW = parseInt(process.env.SCORE_MIN || '100', 10);
+const SCORE_MIN = Number.isNaN(SCORE_MIN_RAW) ? 100 : Math.max(0, SCORE_MIN_RAW);
 const TOP_N = Math.max(10, Math.min(100, parseInt(process.env.TOP_N || '30', 10) || 30));
 const MAX_POSTS_PER_POLL = Math.max(1, parseInt(process.env.MAX_POSTS_PER_POLL || '5', 10) || 5);
 const STATE_FILE = process.env.STATE_FILE || './data/hackernews-state.json';
 const POST_MESSAGE = process.env.POST_MESSAGE
   || '🟠 **HN** ({score}) — {title}\n{url}\n_comments: {comments}_';
+// POST /poll is only enabled when POLL_TOKEN is set, and then needs that token.
+const POLL_TOKEN = (process.env.POLL_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 const HN_TOP = 'https://hacker-news.firebaseio.com/v0/topstories.json';
@@ -60,6 +64,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -140,25 +145,41 @@ async function pollOnce() {
   const fresh = items
     .filter((it) => it.id != null && !seen.has(String(it.id)))
     .filter((it) => (it.score || 0) >= SCORE_MIN)
-    // lower score first among new so we post steadily; actually prefer higher score
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, MAX_POSTS_PER_POLL);
 
+  // Only posted stories are marked seen. A story below SCORE_MIN stays
+  // unseen, so it still gets posted if it climbs past the threshold later.
   for (const it of fresh) {
     await postToHaven(formatStory(it));
     seen.add(String(it.id));
+    state.seen = [...seen].slice(-1000);
+    saveState(state);
     console.log(`[${new Date().toISOString()}] posted HN ${it.id}: ${it.title} (${it.score})`);
     await new Promise((r) => setTimeout(r, 800));
   }
+}
 
-  // Also mark other new ids as seen so we don't post later if they never hit SCORE_MIN while still "new"
-  // Optional: only mark posted. Spec says post new top stories above SCORE_MIN — mark only those we considered from top list that are below min too to avoid late spam when they climb.
-  for (const it of items) {
-    if (it.id != null) seen.add(String(it.id));
+// Shared by the timer and POST /poll so two polls never run at once.
+let polling = false;
+
+async function runPoll() {
+  if (polling) return false;
+  polling = true;
+  try {
+    await pollOnce();
+  } finally {
+    polling = false;
   }
+  return true;
+}
 
-  state.seen = [...seen].slice(-1000);
-  saveState(state);
+function pollTokenOk(req) {
+  const auth = req.get('Authorization') || '';
+  const provided = auth.startsWith('Bearer ') ? auth.slice(7).trim() : (req.get('X-Poll-Token') || '');
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(POLL_TOKEN, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 const app = express();
@@ -180,9 +201,11 @@ app.get('/health', (_req, res) =>
     seen: state.seen.length,
   })
 );
-app.post('/poll', async (_req, res) => {
+app.post('/poll', async (req, res) => {
+  if (!POLL_TOKEN) return res.status(404).json({ error: 'POST /poll is disabled (set POLL_TOKEN)' });
+  if (!pollTokenOk(req)) return res.status(401).json({ error: 'invalid poll token' });
   try {
-    await pollOnce();
+    if (!(await runPoll())) return res.status(409).json({ error: 'a poll is already running' });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -192,8 +215,8 @@ app.post('/poll', async (_req, res) => {
 app.listen(PORT, () => {
   console.log(`hackernews bot listening on :${PORT}`);
   console.log(`  SCORE_MIN=${SCORE_MIN} TOP_N=${TOP_N} poll every ${POLL_INTERVAL_SEC}s`);
-  pollOnce().catch((e) => console.error('[poll]', e.message));
+  runPoll().catch((e) => console.error('[poll]', e.message));
   setInterval(() => {
-    pollOnce().catch((e) => console.error('[poll]', e.message));
+    runPoll().catch((e) => console.error('[poll]', e.message));
   }, POLL_INTERVAL_SEC * 1000);
 });

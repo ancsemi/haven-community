@@ -7,6 +7,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -29,6 +30,8 @@ const REGISTRY_BASE = (process.env.REGISTRY_BASE || 'https://registry.npmjs.org'
 const POST_MESSAGE =
   process.env.POST_MESSAGE ||
   '📦 **npm release** — `{package}`\n**{version}**\n{url}\n_{time}_';
+// POST /poll is only enabled when POLL_TOKEN is set, and then needs that token.
+const POLL_TOKEN = (process.env.POLL_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL) {
@@ -75,6 +78,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -132,10 +136,6 @@ async function pollPackage(pkg) {
     return;
   }
 
-  if (hasPreTag(latest) && !INCLUDE_PRERELEASES) {
-    // Still prime/update state so we don't spam when they flip to stable later incorrectly
-  }
-
   const prev = state.versions[pkg];
   if (prev == null) {
     state.versions[pkg] = latest;
@@ -178,6 +178,28 @@ async function pollAll() {
   }
 }
 
+// Shared by the timer and POST /poll so two polls never run at once.
+let polling = false;
+
+async function runPoll() {
+  if (polling) return false;
+  polling = true;
+  try {
+    await pollAll();
+  } finally {
+    polling = false;
+  }
+  return true;
+}
+
+function pollTokenOk(req) {
+  const auth = req.get('Authorization') || '';
+  const provided = auth.startsWith('Bearer ') ? auth.slice(7).trim() : (req.get('X-Poll-Token') || '');
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(POLL_TOKEN, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 const app = express();
 
 app.get('/', (_req, res) => {
@@ -195,9 +217,11 @@ app.get('/health', (_req, res) =>
     versions: state.versions,
   })
 );
-app.post('/poll', async (_req, res) => {
+app.post('/poll', async (req, res) => {
+  if (!POLL_TOKEN) return res.status(404).json({ error: 'POST /poll is disabled (set POLL_TOKEN)' });
+  if (!pollTokenOk(req)) return res.status(401).json({ error: 'invalid poll token' });
   try {
-    await pollAll();
+    if (!(await runPoll())) return res.status(409).json({ error: 'a poll is already running' });
     res.json({ ok: true, versions: state.versions });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -208,8 +232,8 @@ app.listen(PORT, () => {
   console.log(`npm-releases bot listening on :${PORT}`);
   console.log(`  packages: ${PACKAGE_NAMES.join(', ')}`);
   console.log(`  poll every ${POLL_INTERVAL_SEC}s; prereleases=${INCLUDE_PRERELEASES}`);
-  pollAll().catch((e) => console.error('initial poll:', e.message));
+  runPoll().catch((e) => console.error('initial poll:', e.message));
   setInterval(() => {
-    pollAll().catch((e) => console.error('poll:', e.message));
+    runPoll().catch((e) => console.error('poll:', e.message));
   }, POLL_INTERVAL_SEC * 1000);
 });

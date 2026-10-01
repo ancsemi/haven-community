@@ -38,8 +38,12 @@ cd haven-community/bots/karma
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 
@@ -53,13 +57,14 @@ node server.js
 | `ALLOW_SELF` | no | Allow self ++/-- (default `false`) |
 | `TOP_N` | no | Leaderboard size (default `10`) |
 | `ANNOUNCE` | no | Post channel messages on ++/-- (default `true`) |
+| `MAX_TRACKED` | no | Most names kept in the state file (default `5000`). Past that, the names with the score closest to zero are dropped |
 | `HAVEN_WEBHOOK_TOKEN` | no | 64-hex token for slash registration |
 | `PORT` | no | HTTP port (default `3000`) |
 
 ## Behaviour
 
 - Names are matched case-insensitively (2–32 chars, alnum / `_` `.` `-`).
-- Scores persist in `STATE_FILE`.
+- Scores persist in `STATE_FILE`. Changes are batched and written about two seconds after the last `++`/`--`, and flushed on shutdown (Ctrl+C or SIGTERM).
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

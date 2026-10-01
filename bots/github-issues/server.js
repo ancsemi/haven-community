@@ -21,7 +21,9 @@ const ACTIONS = new Set(
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
 );
-const BODY_MAX_CHARS = Math.max(0, parseInt(process.env.BODY_MAX_CHARS || '800', 10) || 800);
+// 0 is a real value here (no truncation), so do not use `|| 800` on the parse.
+const BODY_MAX_RAW = parseInt(process.env.BODY_MAX_CHARS || '800', 10);
+const BODY_MAX_CHARS = Number.isNaN(BODY_MAX_RAW) ? 800 : Math.max(0, BODY_MAX_RAW);
 const IGNORE_PRS = String(process.env.IGNORE_PRS || 'true').toLowerCase() !== 'false';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -101,6 +103,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');

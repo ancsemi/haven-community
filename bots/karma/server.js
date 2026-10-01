@@ -19,6 +19,10 @@ const STATE_FILE = process.env.STATE_FILE || './data/karma-state.json';
 const ALLOW_SELF = String(process.env.ALLOW_SELF || 'false').toLowerCase() === 'true';
 const TOP_N = Math.max(1, parseInt(process.env.TOP_N || '10', 10) || 10);
 const ANNOUNCE = String(process.env.ANNOUNCE || 'true').toLowerCase() !== 'false';
+// Cap on stored names, so a flood of random name++ cannot grow the state file forever.
+const MAX_TRACKED = Math.max(10, parseInt(process.env.MAX_TRACKED || '5000', 10) || 5000);
+// Score changes are batched into one state file write after this many ms.
+const SAVE_DELAY_MS = 2000;
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -44,6 +48,50 @@ function saveState(state) {
 }
 
 const state = loadState();
+
+let saveTimer = null;
+
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      saveState(state);
+    } catch (err) {
+      console.error('[state] save failed:', err.message);
+    }
+  }, SAVE_DELAY_MS);
+}
+
+function flushSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  saveState(state);
+}
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try {
+      flushSave();
+    } catch (err) {
+      console.error('[state] save on exit failed:', err.message);
+    }
+    process.exit(0);
+  });
+}
+
+// Drops the names whose score is closest to zero until we are back under
+// MAX_TRACKED. The name that was just changed is always kept.
+function pruneScores(keepKey) {
+  const keys = Object.keys(state.scores);
+  if (keys.length <= MAX_TRACKED) return;
+  const victims = keys
+    .filter((k) => k !== keepKey)
+    .sort((a, b) => Math.abs(Number(state.scores[a]) || 0) - Math.abs(Number(state.scores[b]) || 0))
+    .slice(0, keys.length - MAX_TRACKED);
+  for (const k of victims) delete state.scores[k];
+}
 
 function verifySignature(rawBody, headerValue) {
   if (!headerValue) return false;
@@ -91,7 +139,8 @@ function addScore(name, delta) {
   if (!key) throw new Error('Empty name.');
   const cur = getScore(key);
   state.scores[key] = cur + delta;
-  saveState(state);
+  pruneScores(key);
+  scheduleSave();
   return { key, score: state.scores[key] };
 }
 
@@ -103,6 +152,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -121,6 +171,7 @@ async function registerCommands() {
       command: 'karma',
       description: 'Check karma: /karma [user] or /karma top',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -135,7 +186,7 @@ function extractMessage(payload) {
   const user = msg.user || msg.author || payload.user || payload.author || {};
   const username = user.username || user.displayName || msg.username || 'unknown';
   const userId = user.id ?? msg.user_id ?? msg.userId ?? payload.user_id ?? null;
-  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.webhook_id || msg.webhookId);
+  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.is_webhook || msg.webhook_id || msg.webhookId);
   return { content, username, userId, isBot };
 }
 
@@ -209,7 +260,7 @@ async function handleSlash(payload) {
   if (command !== 'karma') return { ignored: true };
 
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  const user = payload.author || {};
   const parts = args.split(/\s+/).filter(Boolean);
   const head = (parts[0] || '').toLowerCase();
 

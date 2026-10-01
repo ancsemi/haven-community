@@ -13,6 +13,8 @@ Safe calculator for Haven — `/math <expr>` with a recursive-descent parser (no
 
 `+` `-` `*` `/` `^` (power, right-assoc) `%` (modulo) and parentheses.
 
+`^` binds tighter than a leading minus, as in standard math: `-2^2` is `-4`, and `(-2)^2` is `4`.
+
 ### Examples
 
 ```
@@ -39,8 +41,12 @@ cd haven-community/bots/math
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 

@@ -18,7 +18,9 @@ const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const STATE_FILE = process.env.STATE_FILE || './data/leveling-state.json';
 const XP_PER_MESSAGE = Math.max(1, parseInt(process.env.XP_PER_MESSAGE || '15', 10) || 15);
-const XP_COOLDOWN_SEC = Math.max(0, parseInt(process.env.XP_COOLDOWN_SEC || '60', 10) || 60);
+// 0 is valid here (no cooldown), so do not use `|| 60` on the parse.
+const XP_COOLDOWN_RAW = parseInt(process.env.XP_COOLDOWN_SEC || '60', 10);
+const XP_COOLDOWN_SEC = Number.isNaN(XP_COOLDOWN_RAW) ? 60 : Math.max(0, XP_COOLDOWN_RAW);
 const XP_BASE = Math.max(1, parseFloat(process.env.XP_BASE || '5') || 5);
 const XP_EXP = Math.max(1, parseFloat(process.env.XP_EXP || '2') || 2);
 const LEVELUP_MESSAGE = process.env.LEVELUP_MESSAGE
@@ -102,6 +104,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -132,6 +135,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -202,7 +206,7 @@ function extractMessage(payload) {
   const user = msg.user || msg.author || payload.user || payload.author || {};
   const username = user.username || user.displayName || msg.username || 'unknown';
   const userId = user.id ?? msg.user_id ?? msg.userId ?? payload.user_id ?? null;
-  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.webhook_id || msg.webhookId);
+  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.is_webhook || msg.webhook_id || msg.webhookId);
   return { content, username, userId, isBot };
 }
 
@@ -242,7 +246,7 @@ async function awardXp(payload) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const invoker = payload.user || {};
+  const invoker = payload.author || {};
 
   if (command === 'levels') {
     await postToHaven(formatLeaderboard(10));
@@ -260,9 +264,13 @@ async function handleSlash(payload) {
       await postToHaven(formatRank(found.key, found.user));
       return;
     }
-    const key = userKey(invoker.id, invoker.username || invoker.displayName);
-    const user = ensureUser(key, invoker.username || invoker.displayName || 'you');
-    saveState(state);
+    const name = invoker.username || invoker.displayName || 'you';
+    const key = userKey(invoker.id, name);
+    const user = state.users[key];
+    if (!user) {
+      await postToHaven(`**${name}** has no XP yet. Chat in this channel to earn some.`);
+      return;
+    }
     await postToHaven(formatRank(key, user));
     return;
   }

@@ -4,9 +4,9 @@ Generate a cryptographically strong password: `/password` or `/password 24 nosym
 
 Uses `crypto.randomBytes` with rejection sampling (no `Math.random`).
 
-## ⚠️ Channel privacy
+## Privacy
 
-Passwords are **posted to the channel**. Prefer a private/test channel, then change the password if others can see the history. This bot does not DM (use `echo-once` patterns elsewhere if you need ephemeral replies).
+Replies are **private**: the bot sends them as ephemeral messages to the person who ran the command (`ephemeral: true` with `recipient_id` set to the caller), so nobody else in the channel sees the password and it is not stored in channel history. If the private reply fails, the bot posts a short error in the channel instead. It never posts a password publicly.
 
 ## Commands
 
@@ -45,8 +45,12 @@ cd haven-community/bots/password-gen
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 

@@ -2,16 +2,15 @@
 
 `/echo <text>` re-posts your text as the bot.
 
-- If the slash callback includes a user / `recipient_id` **and** `PREFER_EPHEMERAL=true`, the webhook POST sets `ephemeral: true` and `recipient_id` for a private-style reply (when Haven supports it).
-- Otherwise the message is public in the channel.
-- If ephemeral is rejected by the API, the bot **falls back to a public post**.
+- With `PREFER_EPHEMERAL=true` (the default), the webhook POST sets `ephemeral: true` and `recipient_id` to the caller's id, so only the person who ran the command sees the reply.
+- With `PREFER_EPHEMERAL=false`, the message is public in the channel.
+- If the private reply fails, the bot posts a short error instead. It never reposts your text in public.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/echo <text>` | Echo text (ephemeral when possible) |
-| `/say-echo <text>` | Alias |
+| `/echo <text>` | Echo text back to you privately |
 
 ## Setup
 
@@ -31,8 +30,12 @@ cd haven-community/bots/echo-once
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 
@@ -40,8 +43,8 @@ node server.js
 |----------|----------|-------------|
 | `HAVEN_WEBHOOK_URL` | yes | Full Haven bot webhook URL |
 | `CALLBACK_SECRET` | yes | HMAC secret for `/haven` |
-| `PREFER_EPHEMERAL` | no | Use ephemeral when recipient known (default `true`) |
-| `FORCE_EPHEMERAL` | no | Always request ephemeral when recipient present (default `false`) |
+| `PREFER_EPHEMERAL` | no | Reply privately to the caller (default `true`) |
+| `FORCE_EPHEMERAL` | no | Always reply privately, even when `PREFER_EPHEMERAL=false` (default `false`) |
 | `MAX_LENGTH` | no | Max text length (default `2000`) |
 | `PREFIX` | no | Optional string prepended to echo |
 | `HAVEN_USERNAME` | no | Display name override |
@@ -51,7 +54,7 @@ node server.js
 
 ## Behaviour
 
-- Recipient is taken from `payload.recipient_id`, `payload.user.id`, or `user_id` fields.
+- The recipient is the caller, taken from `payload.author.id` on the slash command callback.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

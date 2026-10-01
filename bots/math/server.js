@@ -52,6 +52,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -72,6 +73,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -84,9 +86,9 @@ async function registerCommands() {
 // ── Safe recursive-descent parser ──────────────────────────────────────────
 // Grammar:
 //   expr   = term  ((+|-) term)*
-//   term   = power ((*|/|%) power)*
-//   power  = unary (^ unary)*   // right-assoc
-//   unary  = (+|-) unary | primary
+//   term   = unary ((*|/|%) unary)*
+//   unary  = (+|-) unary | power   // looser than ^, so -2^2 = -4
+//   power  = primary (^ unary)?     // right-assoc, allows 2^-1
 //   primary = number | '(' expr ')'
 
 function tokenize(input) {
@@ -175,14 +177,14 @@ function parseExpr(tokens) {
       consume('-');
       return -parseUnary();
     }
-    return parsePrimary();
+    return parsePower();
   }
 
   function parsePower() {
-    let left = parseUnary();
+    let left = parsePrimary();
     if (peek().type === '^') {
       consume('^');
-      const right = parsePower(); // right-assoc
+      const right = parseUnary(); // right-assoc: unary leads back into parsePower
       if (Math.abs(right) > 1000) throw new Error('Exponent too large.');
       const v = Math.pow(left, right);
       if (!Number.isFinite(v)) throw new Error('Result not finite.');
@@ -192,10 +194,10 @@ function parseExpr(tokens) {
   }
 
   function parseTerm() {
-    let left = parsePower();
+    let left = parseUnary();
     while (['*', '/', '%'].includes(peek().type)) {
       const op = consume().type;
-      const right = parsePower();
+      const right = parseUnary();
       if (op === '*') left = left * right;
       else if (op === '/') {
         if (right === 0) throw new Error('Division by zero.');

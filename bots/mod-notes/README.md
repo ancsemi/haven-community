@@ -33,8 +33,12 @@ cd haven-community/bots/mod-notes
 npm install
 cp .env.example .env
 # set ALLOWED_USER_IDS to staff Haven user ids
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 
@@ -42,7 +46,7 @@ node server.js
 |----------|----------|-------------|
 | `HAVEN_WEBHOOK_URL` | yes | Full Haven bot webhook URL |
 | `CALLBACK_SECRET` | yes | HMAC secret for `/haven` |
-| `ALLOWED_USER_IDS` | no | Comma-separated staff ids (empty = open) |
+| `ALLOWED_USER_IDS` | yes | Comma-separated staff Haven user ids. If it is empty, every note command is refused |
 | `MODERATOR_USER_IDS` | no | Alias for allowlist |
 | `APPROVER_USER_IDS` | no | Alias for allowlist |
 | `STATE_FILE` | no | JSON path (default `./data/mod-notes-state.json`) |
@@ -55,6 +59,7 @@ node server.js
 
 ## Behaviour
 
+- Only the Haven user ids in `ALLOWED_USER_IDS` (or its aliases) can use the note commands. With no ids set, the bot refuses everyone and logs a warning at startup.
 - Target is free-form (user id or name string).
 - Notes are **public in the bot channel** unless you host the bot only in a private staff channel.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.

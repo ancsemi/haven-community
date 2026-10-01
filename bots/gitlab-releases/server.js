@@ -16,7 +16,9 @@ const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const PROJECT_FILTER = (process.env.PROJECT_FILTER || '').trim().toLowerCase();
 const INCLUDE_UPDATES = String(process.env.INCLUDE_UPDATES || 'false').toLowerCase() === 'true';
-const BODY_MAX_CHARS = Math.max(0, parseInt(process.env.BODY_MAX_CHARS || '1500', 10) || 1500);
+// 0 is a real value here (no truncation), so do not use `|| 1500` on the parse.
+const BODY_MAX_RAW = parseInt(process.env.BODY_MAX_CHARS || '1500', 10);
+const BODY_MAX_CHARS = Number.isNaN(BODY_MAX_RAW) ? 1500 : Math.max(0, BODY_MAX_RAW);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !GITLAB_TOKEN) {
@@ -64,10 +66,10 @@ function buildMessage(payload) {
   }
 
   const icon = action === 'update' ? '📝' : action === 'delete' ? '🗑️' : '🚀';
-  const kind = action === 'update' ? 'updated release' : action === 'delete' ? 'deleted release' : 'release';
+  const heading = action === 'update' ? 'Release updated' : action === 'delete' ? 'Release deleted' : 'New release';
 
   const lines = [];
-  lines.push(`${icon} **New ${kind}: ${project} ${name}**`);
+  lines.push(`${icon} **${heading}: ${project} ${name}**`);
   if (tag && tag !== name) lines.push(`Tag: \`${tag}\``);
   if (url) lines.push(url);
   if (author) lines.push(`_by ${author}_`);
@@ -86,6 +88,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');

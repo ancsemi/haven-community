@@ -21,6 +21,7 @@ const DADJOKE_URL = 'https://icanhazdadjoke.com/';
 const OFFICIAL_RANDOM = 'https://official-joke-api.appspot.com/random_joke';
 const OFFICIAL_PROGRAMMING =
   'https://official-joke-api.appspot.com/jokes/programming/random';
+const USER_AGENT = 'haven-community-joke-bot (https://github.com/ancsemi/haven-community)';
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
@@ -56,6 +57,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -76,6 +78,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -89,7 +92,8 @@ function resolveKind(args, forceDad) {
   if (forceDad) return 'dad';
   const a = String(args || '').trim().toLowerCase();
   if (!a) {
-    if (JOKE_SOURCE === 'programming' || JOKE_SOURCE === 'official') return 'any';
+    if (JOKE_SOURCE === 'programming') return 'programming';
+    if (JOKE_SOURCE === 'official') return 'any';
     return 'dad';
   }
   if (a === 'dad' || a === 'dadjoke' || a === 'dad-joke') return 'dad';
@@ -102,8 +106,9 @@ async function fetchDadJoke() {
   const res = await fetch(DADJOKE_URL, {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'haven-community-joke-bot (https://github.com/Amnibro/haven-community)',
+      'User-Agent': USER_AGENT,
     },
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`icanhazdadjoke HTTP ${res.status}`);
   const data = await res.json();
@@ -117,8 +122,9 @@ async function fetchOfficial(kind) {
   const res = await fetch(url, {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'haven-community-joke-bot (https://github.com/Amnibro/haven-community)',
+      'User-Agent': USER_AGENT,
     },
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) throw new Error(`Official Joke API HTTP ${res.status}`);
   let data = await res.json();

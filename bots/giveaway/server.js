@@ -20,6 +20,13 @@ const STATE_FILE = process.env.STATE_FILE || './data/giveaway-state.json';
 const TICK_INTERVAL_MS = Math.max(1000, parseInt(process.env.TICK_INTERVAL_MS || '5000', 10) || 5000);
 const MAX_GIVEAWAYS = Math.max(1, parseInt(process.env.MAX_GIVEAWAYS || '50', 10) || 50);
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
+// Haven user ids (comma separated) allowed to end any giveaway, besides its host.
+const STAFF_USER_IDS = new Set(
+  (process.env.STAFF_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
@@ -93,6 +100,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -117,6 +125,7 @@ async function registerCommands() {
         { name: 'list', description: 'List open giveaways' },
       ],
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -213,7 +222,7 @@ async function handleSlash(payload) {
   const args = String(payload.args || '').trim();
   const parts = args.split(/\s+/).filter(Boolean);
   const sub = (parts[0] || '').toLowerCase();
-  const user = payload.user || {};
+  const user = payload.author || {};
 
   if (sub === 'list' || !sub) {
     await postToHaven(listOpen());
@@ -289,6 +298,12 @@ async function handleSlash(payload) {
     const g = getG(id);
     if (!g || g.status !== 'open') {
       await postToHaven(`No open giveaway #${id}.`);
+      return;
+    }
+    const callerId = user.id != null ? String(user.id) : '';
+    const isHost = callerId !== '' && g.hostId != null && String(g.hostId) === callerId;
+    if (!isHost && !STAFF_USER_IDS.has(callerId)) {
+      await postToHaven(`❌ Only the host (**${g.host}**) or staff can end giveaway #${id}.`);
       return;
     }
     await endGiveaway(g, 'manual');

@@ -8,7 +8,7 @@ Timed giveaways for Haven — start, enter, auto-pick a random winner when time 
 |---------|-------------|
 | `/giveaway start <duration> <prize>` | Start a giveaway (`10m`, `2h`, `1d`, …) |
 | `/giveaway enter <id>` | Enter an open giveaway |
-| `/giveaway end <id>` | End early and pick a winner |
+| `/giveaway end <id>` | End early and pick a winner (host or `STAFF_USER_IDS` only) |
 | `/giveaway list` | List open giveaways |
 
 ## What it looks like
@@ -45,8 +45,12 @@ cd haven-community/bots/giveaway
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 
@@ -59,6 +63,7 @@ node server.js
 | `STATE_FILE` | no | State path (default `./data/giveaway-state.json`) |
 | `TICK_INTERVAL_MS` | no | How often to check expired giveaways (default `5000`) |
 | `MAX_GIVEAWAYS` | no | Cap on stored giveaways (default `50`) |
+| `STAFF_USER_IDS` | no | Comma separated Haven user ids that may end any giveaway (the host can always end their own) |
 | `HAVEN_WEBHOOK_TOKEN` | no | 64-hex token for slash registration |
 | `PORT` | no | HTTP port (default `3000`) |
 

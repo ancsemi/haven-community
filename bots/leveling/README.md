@@ -37,8 +37,12 @@ cd haven-community/bots/leveling
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 
@@ -69,7 +73,9 @@ Default `XP_BASE=5`, `XP_EXP=2` → level 1 needs 5 XP, level 2 needs 5+20, etc.
 
 ## Behaviour
 
+- XP only counts for messages in the channel the bot was created in. Haven sends a bot the `message` events of its own channel only, so chat elsewhere earns nothing.
 - Bot/webhook messages do not earn XP.
+- `XP_COOLDOWN_SEC=0` turns the cooldown off.
 - Cooldown is per user id (or username key if id missing).
 - State persists across restarts.
 - Signature verification accepts `sha256=<hex>` and bare hex.

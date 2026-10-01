@@ -32,8 +32,12 @@ cd haven-community/bots/joke
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+This needs Node 20.6 or newer, which loads `.env` through `--env-file`.
+
+If the bot runs on localhost or a LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Otherwise Haven's SSRF guard drops the slash command callbacks.
 
 ## Configuration (`.env`)
 
@@ -43,7 +47,7 @@ node server.js
 | `CALLBACK_SECRET` | yes | HMAC secret for `/haven` |
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
-| `JOKE_SOURCE` | no | Default when no args: `dadjoke` (default), `official`, or `programming` |
+| `JOKE_SOURCE` | no | What plain `/joke` returns: `dadjoke` (default), `official` (any Official Joke API joke), or `programming` (programming jokes only) |
 | `HAVEN_WEBHOOK_TOKEN` | no | 64-hex token for slash registration |
 | `PORT` | no | HTTP port (default `3000`) |
 

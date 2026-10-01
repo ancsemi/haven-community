@@ -2,6 +2,7 @@
 //
 // /password [length] — secure random password (crypto.randomBytes).
 // Optional charset flags: /password 20 symbols|nosymbols|alphanum|pin
+// Replies are private: only the person who ran the command sees them.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -57,14 +58,21 @@ function webhookToken() {
   return m ? m[1] : '';
 }
 
-async function postToHaven(content) {
+// With a recipientId the message is ephemeral: Haven delivers it only to
+// that user and does not store it in channel history.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null && recipientId !== '') {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -89,6 +97,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -193,32 +202,49 @@ async function handleSlash(payload) {
     return { ignored: true };
   }
 
+  // Every reply goes privately to the caller. Never post a password publicly.
+  const author = payload.author || {};
+  const recipientId = author.id != null && author.id !== '' ? author.id : null;
+  if (recipientId == null) {
+    await postToHaven('❌ Could not send a private reply: the command did not say who sent it.');
+    return;
+  }
+
   const args = String(payload.args || '').trim();
   if (args.toLowerCase() === 'help') {
     await postToHaven(
-      `Usage: \`/password [length] [mode]\`\nModes: \`symbols\` (default), \`nosymbols\`, \`alphanum\`, \`alpha\`, \`pin\`, \`hex\`\nLength: ${MIN_LENGTH}–${MAX_LENGTH} (default ${DEFAULT_LENGTH}).\n⚠️ Posted publicly — change after copy if this channel is shared.`
+      `Usage: \`/password [length] [mode]\`\nModes: \`symbols\` (default), \`nosymbols\`, \`alphanum\`, \`alpha\`, \`pin\`, \`hex\`\nLength: ${MIN_LENGTH} to ${MAX_LENGTH} (default ${DEFAULT_LENGTH}).\nReplies are private: only you can see them.`,
+      recipientId
     );
     return;
   }
 
   const { length, mode } = parseArgs(args);
   if (!Number.isInteger(length) || length < MIN_LENGTH || length > MAX_LENGTH) {
-    await postToHaven(`❌ Length must be ${MIN_LENGTH}–${MAX_LENGTH}.`);
+    await postToHaven(`❌ Length must be ${MIN_LENGTH} to ${MAX_LENGTH}.`, recipientId);
     return;
   }
 
+  let pw;
   try {
-    const pw = generatePassword(length, mode);
+    pw = generatePassword(length, mode);
+  } catch (err) {
+    await postToHaven(`❌ ${err.message}`, recipientId);
+    return;
+  }
+  try {
     await postToHaven(
       [
-        '🔑 **Password generated**',
+        '🔑 **Password generated** (only you can see this)',
         `Length: **${length}** · mode: \`${mode}\``,
         `\`\`\`\n${pw}\n\`\`\``,
-        '_Rotate if this channel is not private._',
-      ].join('\n').slice(0, 4000)
+      ].join('\n').slice(0, 4000),
+      recipientId
     );
   } catch (err) {
-    await postToHaven(`❌ ${err.message}`);
+    // Do not fall back to a public post. Say it failed, without the password.
+    console.warn(`[${new Date().toISOString()}] private reply failed: ${err.message}`);
+    await postToHaven('❌ Could not deliver a private password. Please try again later.');
   }
 }
 

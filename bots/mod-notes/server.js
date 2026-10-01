@@ -1,7 +1,8 @@
 // mod-notes — Haven community bot
 //
 // Staff notes: /note add <userId> <text>, /note list <userId>, /note remove …
-// Stored in STATE_FILE. Optional ALLOWED_USER_IDS (or MODERATOR_USER_IDS).
+// Stored in STATE_FILE. ALLOWED_USER_IDS (or MODERATOR_USER_IDS) is required:
+// with no ids set, every note command is refused.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -82,7 +83,8 @@ function webhookToken() {
 }
 
 function isAllowed(user) {
-  if (!ALLOWED_USER_IDS.length) return true;
+  // Fail closed: an empty allowlist means nobody, not everybody.
+  if (!ALLOWED_USER_IDS.length) return false;
   if (!user || user.id == null) return false;
   return ALLOWED_USER_IDS.some((id) => String(id) === String(user.id));
 }
@@ -99,6 +101,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -128,6 +131,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -224,14 +228,18 @@ function formatList(target) {
 
 async function denyIfNeeded(user) {
   if (isAllowed(user)) return false;
-  await postToHaven('❌ You are not allowed to use staff notes.');
+  if (!ALLOWED_USER_IDS.length) {
+    await postToHaven('❌ Staff notes are locked: the bot host has not set `ALLOWED_USER_IDS` yet.');
+  } else {
+    await postToHaven('❌ You are not allowed to use staff notes.');
+  }
   return true;
 }
 
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  const user = payload.author || {};
   const parts = args.split(/\s+/).filter(Boolean);
 
   if (command === 'notes') {
@@ -344,7 +352,7 @@ app.get('/', (_req, res) => {
   res
     .type('text/plain')
     .send(
-      `mod-notes bot running. users=${Object.keys(state.users).length} allowlist=${ALLOWED_USER_IDS.length || 'open'}`
+      `mod-notes bot running. users=${Object.keys(state.users).length} allowlist=${ALLOWED_USER_IDS.length || 'empty (all commands refused)'}`
     );
 });
 app.get('/health', (_req, res) =>
@@ -396,9 +404,11 @@ app.post('/haven', async (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`mod-notes bot listening on :${PORT}`);
-  console.log(
-    `  allowlist: ${ALLOWED_USER_IDS.length ? ALLOWED_USER_IDS.length + ' id(s)' : 'open (anyone)'}`
-  );
+  if (ALLOWED_USER_IDS.length) {
+    console.log(`  allowlist: ${ALLOWED_USER_IDS.length} id(s)`);
+  } else {
+    console.warn('  WARNING: ALLOWED_USER_IDS is empty, so every /note and /notes command will be refused. Set it to your staff Haven user ids.');
+  }
   try {
     await registerCommands();
   } catch (e) {
