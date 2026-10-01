@@ -1,13 +1,13 @@
 {
   "name": "haven-bot-world-clock",
   "version": "1.0.0",
-  "description": "Haven /time city or IANA zone; optional multi-zone board.",
+  "description": "Haven /clock city or IANA zone; optional multi-zone board.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.6"
   },
   "dependencies": {
     "express": "^4.19.2"

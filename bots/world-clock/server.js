@@ -1,7 +1,8 @@
 // world-clock — Haven community bot
 //
-// Slash /time <city or Zone> using Intl / IANA timezones.
-// Optional TIMEZONES env list for /time board (multi-zone snapshot).
+// Slash /clock <city or Zone> using Intl / IANA timezones.
+// Optional TIMEZONES env list for /clock board (multi-zone snapshot).
+// (Haven keeps /time for itself, so this bot uses /clock.)
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -110,6 +111,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -125,15 +127,16 @@ async function registerCommands() {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify({
-      command: 'time',
-      description: 'Show time for a city/zone, or board if no args',
+      command: 'clock',
+      description: 'Show time for a city or zone, or the board if no args',
     }),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
   } else {
-    console.log('[commands] registered /time');
+    console.log('[commands] registered /clock');
   }
 }
 
@@ -145,6 +148,27 @@ function isValidZone(zone) {
     return false;
   }
 }
+
+// Haven treats slash text containing a second "/" as a file path and never
+// sends it to the bot, so IANA ids like Europe/London can't be typed as-is.
+// Index every zone by its full id with "_" in place of "/" (europe_london)
+// and by its last part (london, new_york) so users can type those instead.
+const ZONE_LOOKUP = (() => {
+  const map = new Map();
+  let zones = [];
+  try {
+    zones = Intl.supportedValuesOf('timeZone');
+  } catch {
+    zones = [];
+  }
+  for (const z of zones) {
+    const full = z.toLowerCase().replace(/\//g, '_');
+    if (!map.has(full)) map.set(full, z);
+    const city = z.split('/').pop().toLowerCase();
+    if (!map.has(city)) map.set(city, z);
+  }
+  return map;
+})();
 
 function resolveZone(input) {
   const raw = String(input || '').trim();
@@ -160,6 +184,19 @@ function resolveZone(input) {
   const compact = key.replace(/\s+/g, '');
   const mapped = CITY_ZONES[key] || CITY_ZONES[compact];
   if (mapped && isValidZone(mapped)) return { zone: mapped, label: raw };
+
+  const looked = ZONE_LOOKUP.get(key.replace(/ /g, '_'));
+  if (looked && isValidZone(looked)) return { zone: looked, label: looked };
+
+  // Put the "/" back at each "_" (catches aliases such as Asia_Kolkata).
+  const underscored = raw.replace(/\s+/g, '_');
+  for (let i = underscored.indexOf('_'); i > 0; i = underscored.indexOf('_', i + 1)) {
+    const guess = `${underscored.slice(0, i)}/${underscored.slice(i + 1)}`;
+    if (isValidZone(guess)) {
+      const zone = new Intl.DateTimeFormat('en-US', { timeZone: guess }).resolvedOptions().timeZone;
+      return { zone, label: zone };
+    }
+  }
 
   // Try replacing spaces with underscores for America/New_York style
   const asZone = raw.replace(/\s+/g, '_');
@@ -220,7 +257,7 @@ function formatBoard(zones) {
   const now = new Date();
   if (!zones.length) {
     return (
-      '🌍 **World clock**\n_No TIMEZONES configured. Use `/time <city or Zone>` ' +
+      '🌍 **World clock**\n_No TIMEZONES configured. Use `/clock <city or Zone>` ' +
       'or set TIMEZONES=Europe/London,America/New_York_'
     );
   }
@@ -239,7 +276,7 @@ function formatBoard(zones) {
 
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
-  if (command !== 'time') return { ignored: true };
+  if (command !== 'clock') return { ignored: true };
 
   const args = String(payload.args || '').trim();
   const sub = args.toLowerCase();
@@ -252,7 +289,7 @@ async function handleSlash(payload) {
   const resolved = resolveZone(args);
   if (!resolved) {
     await postToHaven(
-      `❌ Unknown place or zone: **${args}**\nTry an IANA zone (\`Europe/London\`) or city (\`tokyo\`, \`nyc\`).\nOr \`/time\` / \`/time board\` for the configured board.`
+      `❌ Unknown place or zone: **${args}**\nTry a city (\`tokyo\`, \`nyc\`) or an IANA zone written with _ instead of / (\`Europe_London\`).\nOr \`/clock\` or \`/clock board\` for the configured board.`
     );
     return;
   }

@@ -53,6 +53,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -68,6 +69,7 @@ async function registerCommands() {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify({
       command: 'translate',
       description: 'Translate text: /translate <lang> <text>',
@@ -128,7 +130,11 @@ async function translateLibre(text, target, source) {
   };
 }
 
-async function translateMyMemory(text, target, source) {
+// MyMemory rejects queries longer than 500 characters.
+const MYMEMORY_MAX_CHARS = 500;
+
+async function translateMyMemory(fullText, target, source) {
+  const text = fullText.slice(0, MYMEMORY_MAX_CHARS);
   const src = source === 'auto' ? 'en' : source;
   const tgt = target;
   const langpair = `${src}|${tgt}`;
@@ -151,7 +157,7 @@ async function translateMyMemory(text, target, source) {
   if (String(translated).toUpperCase().includes('QUERY LENGTH LIMIT')) {
     throw new Error(translated);
   }
-  return { text: translated, detected: src, engine: 'MyMemory' };
+  return { text: translated, detected: src, engine: 'MyMemory', clipped: fullText.length > text.length };
 }
 
 async function translate(text, targetLang) {
@@ -185,8 +191,9 @@ async function handleSlash(payload) {
     const result = await translate(text, lang);
     const from = result.detected || SOURCE_LANG || '?';
     const to = normalizeLang(lang) || lang;
+    const note = result.clipped ? `\n_(only the first ${MYMEMORY_MAX_CHARS} characters were translated)_` : '';
     await postToHaven(
-      `🌐 **${from} → ${to}** _(${result.engine})_\n${result.text}`.slice(0, 4000)
+      `🌐 **${from} → ${to}** _(${result.engine})_\n${result.text}${note}`.slice(0, 4000)
     );
   } catch (err) {
     await postToHaven(`❌ Translation failed: ${err.message}`.slice(0, 1500));

@@ -27,6 +27,8 @@ const OK_STATUSES = (process.env.OK_STATUSES || '')
 const TIMEOUT_MS = Math.max(1000, parseInt(process.env.TIMEOUT_MS || '10000', 10) || 10000);
 const STATE_FILE = process.env.STATE_FILE || './data/uptime-state.json';
 const ANNOUNCE_INITIAL = String(process.env.ANNOUNCE_INITIAL || 'false').toLowerCase() === 'true';
+// Failed checks in a row before a target is reported DOWN (one blip is not an outage).
+const FAIL_THRESHOLD = Math.max(1, parseInt(process.env.FAIL_THRESHOLD || '2', 10) || 2);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL) {
@@ -71,6 +73,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -118,8 +121,11 @@ function formatFlip(url, result) {
 }
 
 async function pollOnce() {
-  for (const url of TARGET_URLS) {
-    const result = await checkUrl(url);
+  // Check every target at once so one slow URL doesn't delay the rest.
+  const results = await Promise.all(TARGET_URLS.map((url) => checkUrl(url)));
+  for (let i = 0; i < TARGET_URLS.length; i++) {
+    const url = TARGET_URLS[i];
+    const result = results[i];
     const prev = state.targets[url];
     const sample = {
       up: result.up,
@@ -127,6 +133,7 @@ async function pollOnce() {
       latencyMs: result.latencyMs,
       at: Date.now(),
       error: result.error,
+      failStreak: result.up ? 0 : ((prev && prev.failStreak) || 0) + 1,
     };
 
     if (!prev) {
@@ -144,7 +151,11 @@ async function pollOnce() {
       continue;
     }
 
-    if (prev.up !== result.up) {
+    if (prev.up && !result.up && sample.failStreak < FAIL_THRESHOLD) {
+      // Not down for long enough yet: keep reporting it as up.
+      sample.up = true;
+      console.log(`[${new Date().toISOString()}] fail ${sample.failStreak}/${FAIL_THRESHOLD} ${url} status=${result.status}${result.error ? ` ${result.error}` : ''}`);
+    } else if (prev.up !== result.up) {
       try {
         await postToHaven(formatFlip(url, result));
         console.log(`[${new Date().toISOString()}] flip ${url} ${prev.up ? 'UP' : 'DOWN'} → ${result.up ? 'UP' : 'DOWN'} ${result.latencyMs}ms`);
@@ -162,6 +173,18 @@ async function pollOnce() {
   }
 }
 
+// Skip a tick if the previous poll is still running (slow targets or Haven).
+let polling = false;
+async function runPoll() {
+  if (polling) return;
+  polling = true;
+  try {
+    await pollOnce();
+  } finally {
+    polling = false;
+  }
+}
+
 const app = express();
 
 app.get('/', (_req, res) => {
@@ -169,31 +192,26 @@ app.get('/', (_req, res) => {
     `uptime bot running. targets=${TARGET_URLS.length} interval=${INTERVAL}s method=${METHOD}`
   );
 });
+// Counts only: /health is unauthenticated, so it must not reveal which URLs are watched.
 app.get('/health', (_req, res) => {
-  const summary = {};
+  let up = 0;
+  let down = 0;
   for (const url of TARGET_URLS) {
     const t = state.targets[url];
-    summary[url] = t
-      ? { up: t.up, status: t.status, latencyMs: t.latencyMs, at: t.at }
-      : null;
+    if (t) {
+      if (t.up) up++;
+      else down++;
+    }
   }
-  res.json({ ok: true, interval: INTERVAL, targets: summary });
-});
-app.post('/poll', async (_req, res) => {
-  try {
-    await pollOnce();
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.json({ ok: true, interval: INTERVAL, targets: TARGET_URLS.length, up, down });
 });
 
 app.listen(PORT, () => {
   console.log(`uptime bot listening on :${PORT}`);
   console.log(`  targets: ${TARGET_URLS.join(', ')}`);
   console.log(`  interval=${INTERVAL}s method=${METHOD} timeout=${TIMEOUT_MS}ms`);
-  pollOnce().catch((e) => console.error('[poll]', e.message));
+  runPoll().catch((e) => console.error('[poll]', e.message));
   setInterval(() => {
-    pollOnce().catch((e) => console.error('[poll]', e.message));
+    runPoll().catch((e) => console.error('[poll]', e.message));
   }, INTERVAL * 1000);
 });

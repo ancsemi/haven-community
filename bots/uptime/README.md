@@ -30,8 +30,10 @@ cd haven-community/bots/uptime
 npm install
 cp .env.example .env
 # edit .env — set TARGET_URLS
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
 
 ## Configuration (`.env`)
 
@@ -47,12 +49,15 @@ node server.js
 | `TIMEOUT_MS` | no | Request timeout (default `10000`) |
 | `STATE_FILE` | no | Last-known status path (default `./data/uptime-state.json`) |
 | `ANNOUNCE_INITIAL` | no | `true` to post status on first poll (default `false`) |
+| `FAIL_THRESHOLD` | no | Failed checks in a row before posting DOWN (default `2`) |
 | `PORT` | no | HTTP port for health (default `3000`) |
 
 ## Behaviour
 
 - First poll **records** status without posting (unless `ANNOUNCE_INITIAL=true`).
-- Later polls post only when **up/down flips**.
+- Later polls post only when **up/down flips**. A target has to fail `FAIL_THRESHOLD` checks in a row before it is posted as DOWN, so a single blip stays quiet. One good check posts it as UP again.
+- All targets are checked at the same time. If a poll is still running when the next one is due, the new one is skipped.
+- `/health` only reports counts (how many targets are up or down), not the URLs themselves.
 - Latency is wall-clock time for the HTTP attempt (milliseconds).
 - State persists so restarts do not re-spam the last flip.
 

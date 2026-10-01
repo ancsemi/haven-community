@@ -114,6 +114,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -174,6 +175,9 @@ async function pollChannel(channelId) {
     await postToHaven(formatUpload(item, channelName));
     if (item.id) seen.add(item.id);
     if (item.videoId) seen.add(item.videoId);
+    // Save right away so a failure later in this loop doesn't repost this one.
+    state.seen[channelId] = [...seen].slice(-500);
+    saveState(state);
     console.log(`[${new Date().toISOString()}] posted: ${item.title}`);
     await new Promise((r) => setTimeout(r, 1200));
   }
@@ -185,7 +189,20 @@ async function pollChannel(channelId) {
   saveState(state);
 }
 
+// Skip a tick if the previous poll is still running, so two polls can't post
+// the same upload.
+let polling = false;
 async function pollAll() {
+  if (polling) return;
+  polling = true;
+  try {
+    await pollAllOnce();
+  } finally {
+    polling = false;
+  }
+}
+
+async function pollAllOnce() {
   for (const id of CHANNEL_IDS) {
     try {
       await pollChannel(id);
@@ -207,14 +224,6 @@ app.get('/health', (_req, res) => res.json({
   channels: CHANNEL_IDS,
   pollIntervalSec: POLL_INTERVAL_SEC,
 }));
-app.post('/poll', async (_req, res) => {
-  try {
-    await pollAll();
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`youtube bot listening on :${PORT}`);

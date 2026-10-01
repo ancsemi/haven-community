@@ -38,8 +38,10 @@ cd haven-community/bots/youtube
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
 
 ## Configuration (`.env`)
 

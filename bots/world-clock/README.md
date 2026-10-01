@@ -1,20 +1,25 @@
 # world-clock
 
-Show the current time for a city or IANA timezone with `/time`. Optional multi-zone **board** from `TIMEZONES`.
+Show the current time for a city or IANA timezone with `/clock`. Optional multi-zone **board** from `TIMEZONES`.
+
+The command is `/clock` because `/time` is built into Haven and never reaches a bot.
+
+Haven also does not pass slash command text that contains a second `/` on to bots (it treats it as a file path), so `/clock Europe/Berlin` won't work. Type IANA zone names with `_` in place of `/` (`Europe_Berlin`), or just the city part (`Berlin`, `New_York`).
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/time <city or Zone>` | Time for one place (e.g. `tokyo`, `Europe/London`) |
-| `/time` or `/time board` | Snapshot of all zones in `TIMEZONES` |
+| `/clock <city or Zone>` | Time for one place (e.g. `tokyo`, `Europe_London`) |
+| `/clock` or `/clock board` | Snapshot of all zones in `TIMEZONES` |
 
 ### Examples
 
 ```
-/time nyc
-/time Europe/Berlin
-/time board
+/clock nyc
+/clock Europe_Berlin
+/clock Buenos_Aires
+/clock board
 ```
 
 ## Setup
@@ -35,8 +40,12 @@ cd haven-community/bots/world-clock
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
+
+If the bot runs on the same machine as Haven or on your local network (a `localhost` or LAN callback URL), the Haven server must have `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` set, or it will refuse to call the bot.
 
 Uses Node’s built-in `Intl` / IANA timezone data (no external API).
 
@@ -55,7 +64,8 @@ Uses Node’s built-in `Intl` / IANA timezone data (no external API).
 ## Behaviour
 
 - Resolves common city aliases (nyc, london, tokyo, …) to IANA zones.
-- Accepts raw zones like `America/Los_Angeles` or `UTC`.
+- Accepts IANA zones written with `_` instead of `/` (`America_Los_Angeles`), the city part of a zone (`Los_Angeles`), or `UTC`.
+- `TIMEZONES` in `.env` is read by the bot directly, so it uses normal IANA names with `/`.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

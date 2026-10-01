@@ -52,6 +52,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -72,6 +73,7 @@ async function registerCommands() {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify(body),
     });
     if (!res.ok) {

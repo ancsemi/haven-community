@@ -37,13 +37,21 @@ cd haven-community/bots/translate
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
+
+If the bot runs on the same machine as Haven or on your local network (a `localhost` or LAN callback URL), the Haven server must have `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` set, or it will refuse to call the bot.
 
 ### 3. Translation backends
 
 - **LibreTranslate** — set `LIBRETRANSLATE_URL` to a public or self-hosted instance (optional `LIBRETRANSLATE_API_KEY`).
-- **MyMemory** — used automatically when LibreTranslate is unset or fails. Rate-limited free tier; no key required.
+- **MyMemory**: used automatically when LibreTranslate is unset or fails. Rate-limited free tier; no key required. MyMemory only accepts 500 characters, so longer text is cut to the first 500 and the reply says so.
+
+### Limits
+
+- Text containing a `/` can't be translated. Haven treats slash command text with a second `/` as a file path and posts it as plain chat, so it never reaches the bot.
 
 ## Configuration (`.env`)
 

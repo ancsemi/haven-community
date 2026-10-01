@@ -33,8 +33,12 @@ cd haven-community/bots/wikipedia
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
+
+If the bot runs on the same machine as Haven or on your local network (a `localhost` or LAN callback URL), the Haven server must have `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` set, or it will refuse to call the bot.
 
 Host needs outbound HTTPS to `*.wikipedia.org`.
 

@@ -97,6 +97,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -112,7 +113,7 @@ async function registerCommands() {
   const cmds = [
     {
       command: 'tz',
-      description: 'Convert time: /tz 3:30pm America/New_York Europe/London',
+      description: 'Convert time: /tz 3:30pm New_York London',
     },
     {
       command: 'convert',
@@ -123,6 +124,7 @@ async function registerCommands() {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -142,6 +144,27 @@ function isValidZone(zone) {
   }
 }
 
+// Haven treats slash text containing a second "/" as a file path and never
+// sends it to the bot, so IANA ids like America/New_York can't be typed as-is.
+// Index every zone by its full id with "_" in place of "/" (america_new_york)
+// and by its last part (new_york) so users can type those instead.
+const ZONE_LOOKUP = (() => {
+  const map = new Map();
+  let zones = [];
+  try {
+    zones = Intl.supportedValuesOf('timeZone');
+  } catch {
+    zones = [];
+  }
+  for (const z of zones) {
+    const full = z.toLowerCase().replace(/\//g, '_');
+    if (!map.has(full)) map.set(full, z);
+    const city = z.split('/').pop().toLowerCase();
+    if (!map.has(city)) map.set(city, z);
+  }
+  return map;
+})();
+
 function resolveZone(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
@@ -153,6 +176,15 @@ function resolveZone(input) {
   const compact = key.replace(/\s+/g, '');
   const mapped = CITY_ZONES[key] || CITY_ZONES[compact];
   if (mapped && isValidZone(mapped)) return mapped;
+  const looked = ZONE_LOOKUP.get(key.replace(/ /g, '_'));
+  if (looked && isValidZone(looked)) return looked;
+  // Also try putting the "/" back at each "_" (catches aliases such as
+  // Asia_Kolkata that the list above names differently).
+  const underscored = raw.replace(/\s+/g, '_');
+  for (let i = underscored.indexOf('_'); i > 0; i = underscored.indexOf('_', i + 1)) {
+    const guess = `${underscored.slice(0, i)}/${underscored.slice(i + 1)}`;
+    if (isValidZone(guess)) return new Intl.DateTimeFormat('en-US', { timeZone: guess }).resolvedOptions().timeZone;
+  }
   const asZone = raw.replace(/\s+/g, '_');
   if (isValidZone(asZone)) return asZone;
   return null;
@@ -162,23 +194,24 @@ function parseTimeToken(token) {
   const s = String(token || '').trim().toLowerCase();
   if (s === 'now' || s === 'current') return { kind: 'now' };
 
-  // 15:30, 15:30:00, 3:30pm, 3pm
-  let m = s.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)?$/i);
-  // 1530, 1530pm
-  if (!m) m = s.match(/^(\d{1,2})(\d{2})\s*(am|pm)?$/i);
-  if (!m) return null;
-
-  let hour = parseInt(m[1], 10);
+  let hour;
   let minute = 0;
   let second = 0;
   let ampm = null;
 
-  if (m[0].includes(':')) {
+  // 15:30, 15:30:00, 3:30pm, 3pm
+  let m = s.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (m) {
+    hour = parseInt(m[1], 10);
     minute = m[2] != null ? parseInt(m[2], 10) : 0;
-    second = m[3] != null && !/am|pm/i.test(m[3]) ? parseInt(m[3], 10) : 0;
-    ampm = m[4] || (m[3] && /am|pm/i.test(m[3]) ? m[3] : null);
+    second = m[3] != null ? parseInt(m[3], 10) : 0;
+    ampm = m[4] || null;
   } else {
-    minute = parseInt(m[2] || '0', 10);
+    // 1530, 1530pm
+    m = s.match(/^(\d{1,2})(\d{2})\s*(am|pm)?$/i);
+    if (!m) return null;
+    hour = parseInt(m[1], 10);
+    minute = parseInt(m[2], 10);
     ampm = m[3] || null;
   }
 
@@ -314,7 +347,7 @@ function convertClock(clock, fromZone, toZone) {
 }
 
 function tokenizeArgs(args) {
-  // Support: "3:30pm America/New_York Europe/London"
+  // Support: "3:30pm New_York London" or "3:30pm America_New_York Europe_London"
   // or "15:00 NYC London" or "now Tokyo"
   // Also "3:30 pm New York -> London" / "to"
   let s = String(args || '').trim();
@@ -372,7 +405,7 @@ function parseConversion(args) {
   }
 
   return {
-    error: `Could not resolve zones from: \`${remaining.join(' ')}\`. Use IANA ids (America/New_York) or cities (nyc, london).`,
+    error: `Could not resolve zones from: \`${remaining.join(' ')}\`. Use zone names with _ instead of / (America_New_York, New_York) or cities (nyc, london).`,
   };
 }
 
@@ -385,8 +418,9 @@ async function handleSlash(payload) {
     await postToHaven(
       [
         '**Timezone convert**',
-        '• `/tz <time> <from> <to>` — e.g. `/tz 3:30pm America/New_York Europe/London`',
+        '• `/tz <time> <from> <to>`, e.g. `/tz 3:30pm America_New_York Europe_London`',
         '• `/tz 15:00 nyc london`',
+        '• Type zone names with _ instead of / (Haven does not send text with a second / to bots).',
         '• `/tz now Tokyo`',
       ].join('\n')
     );

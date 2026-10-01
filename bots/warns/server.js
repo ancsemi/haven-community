@@ -2,7 +2,8 @@
 //
 // /warn <userId> <reason>, /warns <userId>, /warn clear [userId] [id]
 // Stores warnings in STATE_FILE (does not mute/kick by itself).
-// Optional MODERATOR_USER_IDS / APPROVER_USER_IDS gate.
+// MODERATOR_USER_IDS (or APPROVER_USER_IDS) lists who may warn or clear.
+// When it is empty nobody can.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -27,6 +28,8 @@ const MODERATOR_USER_IDS = (
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_WARNS_PER_USER = Math.max(1, parseInt(process.env.MAX_WARNS_PER_USER || '50', 10) || 50);
+// Cap on how many different people can have warns on file, so STATE_FILE can't grow without limit.
+const MAX_TARGETS = Math.max(1, parseInt(process.env.MAX_TARGETS || '1000', 10) || 1000);
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -85,6 +88,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -112,6 +116,7 @@ async function registerCommands() {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -123,7 +128,8 @@ async function registerCommands() {
 }
 
 function isModerator(user) {
-  if (!MODERATOR_USER_IDS.length) return true;
+  // Fail closed: with no moderator list configured, nobody can warn or clear.
+  if (!MODERATOR_USER_IDS.length) return false;
   if (!user || user.id == null) return false;
   return MODERATOR_USER_IDS.some((id) => String(id) === String(user.id));
 }
@@ -169,6 +175,9 @@ function addWarn(target, reason, moderator) {
   if (!r) throw new Error('Usage: `/warn <userId> <reason>`');
 
   const list = getWarns(t);
+  if (!list.length && Object.keys(state.users).length >= MAX_TARGETS) {
+    throw new Error(`Warn log is full (${MAX_TARGETS} people on file). Clear some first.`);
+  }
   if (list.length >= MAX_WARNS_PER_USER) {
     throw new Error(`User already has ${MAX_WARNS_PER_USER} warns (max). Clear some first.`);
   }
@@ -217,7 +226,7 @@ function formatList(target) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  const user = payload.author || {};
   const parts = args.split(/\s+/).filter(Boolean);
 
   if (command === 'warns') {
@@ -369,7 +378,7 @@ app.listen(PORT, async () => {
   if (MODERATOR_USER_IDS.length) {
     console.log(`  moderator gate: ${MODERATOR_USER_IDS.length} id(s)`);
   } else {
-    console.log('  moderator gate: open (anyone can warn)');
+    console.warn('  WARNING: MODERATOR_USER_IDS is empty, so nobody can issue or clear warns. Set it in .env.');
   }
   try {
     await registerCommands();

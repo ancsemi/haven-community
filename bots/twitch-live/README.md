@@ -36,8 +36,10 @@ cd haven-community/bots/twitch-live
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
 
 ## Configuration (`.env`)
 
@@ -60,6 +62,7 @@ node server.js
 - First poll **seeds** currently-live streamers without posting (avoids dump on deploy).
 - Later polls post only on **offline → live** transitions.
 - When a streamer goes offline, state is cleared so the next go-live notifies again.
+- Long login lists are checked 100 at a time (the Helix limit). If a poll is still running when the next one is due, the new one is skipped.
 
 ## License
 

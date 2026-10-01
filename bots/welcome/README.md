@@ -4,6 +4,12 @@ Posts a configurable welcome message whenever someone joins the bot’s Haven ch
 
 Uses Haven’s `member-joined` webhook event (Haven 3.13+).
 
+### When Haven sends `member-joined`
+
+Haven only sends this event when someone joins by entering the **channel's own code**. People who arrive through a **server code**, a **vanity code**, or an **invite link** do not trigger it, so they will not be greeted.
+
+Haven can also send it again when someone who is already a member joins the channel again. To avoid greeting the same person twice, the bot remembers who it has welcomed (the most recent `MAX_REMEMBERED` people, saved in `STATE_FILE`) and stays quiet for anyone on that list.
+
 ## What the message looks like
 
 ```
@@ -28,12 +34,16 @@ cd haven-community/bots/welcome
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
+
+If the bot runs on the same machine as Haven or on your local network (a `localhost` or LAN callback URL), the Haven server must have `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` set, or it will refuse to call the bot.
 
 ### 3. Test
 
-Have a test user join the channel (or leave and re-join). You should see the welcome line within a few seconds. Haven’s bot panel also has a “test delivery” action if your server version exposes it.
+Have a test user join the channel by entering its channel code. You should see the welcome line within a few seconds. Someone the bot has already welcomed is not greeted again, so use a fresh account (or delete `STATE_FILE` and restart the bot). Haven’s bot panel also has a “test delivery” action if your server version exposes it.
 
 ## Configuration (`.env`)
 
@@ -44,6 +54,8 @@ Have a test user join the channel (or leave and re-join). You should see the wel
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
 | `WELCOME_TEMPLATE` | no | Message template; `{username}` and `{user_id}` are substituted |
+| `STATE_FILE` | no | Where the list of welcomed people is saved (default `./data/welcome-state.json`) |
+| `MAX_REMEMBERED` | no | How many welcomed people to remember (default `5000`; the oldest are forgotten first) |
 | `PORT` | no | Listen port (default `3000`) |
 
 ## Template placeholders

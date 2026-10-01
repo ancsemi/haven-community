@@ -8,6 +8,8 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 
 const HAVEN_WEBHOOK_URL = process.env.HAVEN_WEBHOOK_URL;
@@ -16,6 +18,8 @@ const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const WELCOME_TEMPLATE = process.env.WELCOME_TEMPLATE
   || '👋 Welcome to the channel, **{username}**! Say hi and check the pinned rules.';
+const STATE_FILE = process.env.STATE_FILE || './data/welcome-state.json';
+const MAX_REMEMBERED = Math.max(1, parseInt(process.env.MAX_REMEMBERED || '5000', 10) || 5000);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
@@ -38,6 +42,32 @@ function verifySignature(rawBody, headerValue) {
   }
 }
 
+// Haven can send member-joined again for someone who is already a member, so
+// remember who has been welcomed (oldest dropped past MAX_REMEMBERED).
+function loadWelcomed() {
+  try {
+    const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    return Array.isArray(j.welcomed) ? j.welcomed.map(String).slice(-MAX_REMEMBERED) : [];
+  } catch {
+    return [];
+  }
+}
+
+const welcomedList = loadWelcomed();
+const welcomed = new Set(welcomedList);
+
+function rememberWelcomed(key) {
+  welcomed.add(key);
+  welcomedList.push(key);
+  while (welcomedList.length > MAX_REMEMBERED) welcomed.delete(welcomedList.shift());
+  try {
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ welcomed: welcomedList }));
+  } catch (err) {
+    console.error('[state] save failed:', err.message);
+  }
+}
+
 function renderTemplate(username, userId) {
   return WELCOME_TEMPLATE
     .replaceAll('{username}', username || 'friend')
@@ -52,6 +82,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -101,10 +132,15 @@ app.post('/haven', async (req, res) => {
   const user = payload.user || {};
   const username = user.username || user.displayName || 'friend';
   const userId = user.id;
+  const key = userId != null ? `id:${userId}` : `name:${String(username).toLowerCase()}`;
+  if (welcomed.has(key)) {
+    return res.json({ ignored: 'already welcomed' });
+  }
   const content = renderTemplate(username, userId);
 
   try {
     await postToHaven(content);
+    rememberWelcomed(key);
     console.log(`[${new Date().toISOString()}] welcomed: ${username} (${userId})`);
     res.json({ ok: true });
   } catch (err) {

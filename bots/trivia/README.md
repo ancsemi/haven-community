@@ -33,8 +33,12 @@ cd haven-community/bots/trivia
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
+
+If the bot runs on the same machine as Haven or on your local network (a `localhost` or LAN callback URL), the Haven server must have `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` set, or it will refuse to call the bot.
 
 ## Configuration (`.env`)
 
@@ -57,6 +61,8 @@ node server.js
 
 - HTML entities from OpenTDB are decoded before display/matching.
 - True/False accepts `true`/`false`/`yes`/`no`/`t`/`f` and letters when listed.
+- A letter only counts as an answer when the message is just that letter (`b`, `B.`, `c)`). A message like "a lot of people" is not treated as answer A.
+- With `TIMEOUT_SEC=0` a question stays open until someone answers or runs `/trivia skip` or `/trivia stop`.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

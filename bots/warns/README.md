@@ -29,9 +29,13 @@ git clone https://github.com/ancsemi/haven-community.git
 cd haven-community/bots/warns
 npm install
 cp .env.example .env
-# edit .env — set MODERATOR_USER_IDS in production
-node server.js
+# edit .env and set MODERATOR_USER_IDS
+node --env-file=.env server.js
 ```
+
+Requires Node 20.6 or newer (for `--env-file`).
+
+If the bot runs on the same machine as Haven or on your local network (a `localhost` or LAN callback URL), the Haven server must have `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` set, or it will refuse to call the bot.
 
 ## Configuration (`.env`)
 
@@ -39,10 +43,11 @@ node server.js
 |----------|----------|-------------|
 | `HAVEN_WEBHOOK_URL` | yes | Full Haven bot webhook URL |
 | `CALLBACK_SECRET` | yes | HMAC secret for `/haven` |
-| `MODERATOR_USER_IDS` | no | Comma-separated ids allowed to warn/clear (empty = open) |
+| `MODERATOR_USER_IDS` | yes | Comma-separated Haven user ids allowed to warn/clear. If empty, nobody can (the bot logs a warning at startup). |
 | `APPROVER_USER_IDS` | no | Alias for `MODERATOR_USER_IDS` |
 | `STATE_FILE` | no | JSON path (default `./data/warns-state.json`) |
 | `MAX_WARNS_PER_USER` | no | Cap per user (default `50`) |
+| `MAX_TARGETS` | no | Max number of different people with warns on file (default `1000`) |
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
 | `HAVEN_WEBHOOK_TOKEN` | no | Slash registration token |
@@ -52,6 +57,7 @@ node server.js
 
 - Target is free-form text (user id or username string) so it works without a member lookup API.
 - Not a real mute — log only.
+- Only ids in `MODERATOR_USER_IDS` can issue or clear warns. Leaving it empty locks those commands for everyone; `/warns` still works.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

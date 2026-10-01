@@ -20,7 +20,11 @@ const STATE_FILE = process.env.STATE_FILE || './data/trivia-state.json';
 const CATEGORY = (process.env.CATEGORY || '').trim(); // OpenTDB category id optional
 const DIFFICULTY = String(process.env.DIFFICULTY || '').toLowerCase(); // easy|medium|hard
 const TYPE = String(process.env.TYPE || '').toLowerCase(); // multiple|boolean
-const TIMEOUT_SEC = Math.max(0, parseInt(process.env.TIMEOUT_SEC || '120', 10) || 120);
+// 0 disables the auto-reveal; only a missing or non-numeric value falls back to 120.
+const TIMEOUT_SEC = (() => {
+  const n = parseInt(process.env.TIMEOUT_SEC || '120', 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 120;
+})();
 const ALLOW_BOTS = String(process.env.ALLOW_BOTS || 'false').toLowerCase() === 'true';
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -80,6 +84,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -109,6 +114,7 @@ async function registerCommands() {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -156,7 +162,9 @@ function answersMatch(guess, correct) {
 
 function letterMatch(guess, active) {
   const g = String(guess || '').trim().toLowerCase();
-  const m = g.match(/^([a-d])(?:[\).:]|\s|$)/i) || g.match(/^([a-d])$/i);
+  // Only a lone letter counts ("b", "B.", "c)", "d!"), so ordinary chat such
+  // as "a lot of people" is never read as an answer.
+  const m = g.match(/^([a-d])[).:!?]*$/i);
   if (!m || !active.choices) return false;
   const idx = m[1].toLowerCase().charCodeAt(0) - 97;
   const choice = active.choices[idx];
@@ -264,7 +272,7 @@ function extractMessage(payload) {
   const user = msg.user || msg.author || payload.user || payload.author || {};
   const username = user.username || user.displayName || msg.username || 'unknown';
   const userId = user.id ?? msg.user_id ?? msg.userId ?? payload.user_id ?? null;
-  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.webhook_id || msg.webhookId);
+  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.is_webhook || msg.webhook_id || msg.webhookId);
   return { content, username, userId, isBot };
 }
 

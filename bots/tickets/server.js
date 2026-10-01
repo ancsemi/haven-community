@@ -20,6 +20,14 @@ const STATE_FILE = process.env.STATE_FILE || './data/tickets-state.json';
 const MAX_OPEN = Math.max(1, parseInt(process.env.MAX_OPEN || '50', 10) || 50);
 const MAX_CLOSED_KEEP = Math.max(0, parseInt(process.env.MAX_CLOSED_KEEP || '100', 10) || 100);
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
+// Haven user ids allowed to close any ticket. Everyone else can only close
+// tickets they opened themselves.
+const STAFF_USER_IDS = new Set(
+  (process.env.STAFF_USER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
@@ -76,6 +84,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -104,6 +113,7 @@ async function registerCommands() {
     const res = await fetch(base, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -178,10 +188,21 @@ function openTicket(subject, user) {
   return ticket;
 }
 
+function isOpener(t, user) {
+  return user && user.id != null && t.userId != null && String(t.userId) === String(user.id);
+}
+
+function isStaff(user) {
+  return !!(user && user.id != null && STAFF_USER_IDS.has(String(user.id)));
+}
+
 function closeTicket(id, user) {
   const t = state.tickets[String(id)];
   if (!t) throw new Error(`No ticket #${id}.`);
   if (t.status === 'closed') throw new Error(`Ticket #${id} is already closed.`);
+  if (!isOpener(t, user) && !isStaff(user)) {
+    throw new Error(`Only the person who opened ticket #${id} or staff can close it.`);
+  }
   t.status = 'closed';
   t.closedAt = Date.now();
   t.closedBy = (user && (user.username || user.displayName)) || '';
@@ -194,7 +215,7 @@ function closeTicket(id, user) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  const user = payload.author || {};
 
   if (command !== 'ticket') return { ignored: true };
 
@@ -228,11 +249,7 @@ async function handleSlash(payload) {
     let id = parseInt(parts[1], 10);
     if (!Number.isInteger(id) || id < 1) {
       const mine = openTickets()
-        .filter((t) => {
-          if (user && user.id != null && t.userId != null) return String(t.userId) === String(user.id);
-          const name = (user.username || user.displayName || '').toLowerCase();
-          return name && (t.username || '').toLowerCase() === name;
-        })
+        .filter((t) => isOpener(t, user))
         .sort((a, b) => b.id - a.id);
       if (mine.length === 1) {
         id = mine[0].id;

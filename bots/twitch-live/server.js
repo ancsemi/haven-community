@@ -72,6 +72,7 @@ async function getAppToken() {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
+    signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -100,10 +101,14 @@ async function helixGet(pathAndQuery) {
 }
 
 async function fetchStreamsByLogin(logins) {
-  // Helix allows multiple user_login= params
-  const qs = logins.map((l) => `user_login=${encodeURIComponent(l)}`).join('&');
-  const json = await helixGet(`/streams?${qs}`);
-  return Array.isArray(json.data) ? json.data : [];
+  // Helix allows up to 100 user_login= params per request, so ask in batches.
+  const out = [];
+  for (let i = 0; i < logins.length; i += 100) {
+    const qs = logins.slice(i, i + 100).map((l) => `user_login=${encodeURIComponent(l)}`).join('&');
+    const json = await helixGet(`/streams?${qs}&first=100`);
+    if (Array.isArray(json.data)) out.push(...json.data);
+  }
+  return out;
 }
 
 async function postToHaven(content) {
@@ -113,6 +118,7 @@ async function postToHaven(content) {
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -202,6 +208,19 @@ async function pollOnce() {
   saveState(state);
 }
 
+// A slow Twitch or Haven response can outlast the poll interval. Skip a tick
+// instead of running two polls at once (which could post the same go-live twice).
+let polling = false;
+async function runPoll() {
+  if (polling) return;
+  polling = true;
+  try {
+    await pollOnce();
+  } finally {
+    polling = false;
+  }
+}
+
 const app = express();
 
 app.get('/', (_req, res) => {
@@ -216,21 +235,13 @@ app.get('/health', (_req, res) => res.json({
   primed: state.primed,
   pollIntervalSec: POLL_INTERVAL_SEC,
 }));
-app.post('/poll', async (_req, res) => {
-  try {
-    await pollOnce();
-    res.json({ ok: true, live: Object.keys(state.live) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`twitch-live bot listening on :${PORT}`);
   console.log(`  logins: ${TWITCH_USER_LOGINS.join(', ')}`);
   console.log(`  poll every ${POLL_INTERVAL_SEC}s`);
-  pollOnce().catch((e) => console.error('[poll]', e.message));
+  runPoll().catch((e) => console.error('[poll]', e.message));
   setInterval(() => {
-    pollOnce().catch((e) => console.error('[poll]', e.message));
+    runPoll().catch((e) => console.error('[poll]', e.message));
   }, POLL_INTERVAL_SEC * 1000);
 });
