@@ -4,6 +4,9 @@
 // /purge match <substring> deletes matching buffered messages via DELETE API.
 // /purge last <n> is limited (deletes last n tracked messages).
 //
+// Haven allows 30 webhook requests per minute per IP, so deletes are capped
+// per command and spaced out to stay under that limit.
+//
 // See README.md for setup. Configuration is via environment variables only.
 
 'use strict';
@@ -16,7 +19,10 @@ const CALLBACK_SECRET = process.env.CALLBACK_SECRET || '';
 const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const BUFFER_SIZE = Math.max(10, parseInt(process.env.BUFFER_SIZE || '200', 10) || 200);
-const MAX_DELETE = Math.max(1, parseInt(process.env.MAX_DELETE || '25', 10) || 25);
+// Hard ceiling of 20 deletes per command, whatever MAX_DELETE says.
+const MAX_DELETE = Math.min(20, Math.max(1, parseInt(process.env.MAX_DELETE || '20', 10) || 20));
+// About 24 requests a minute, leaving room for the bot's own replies.
+const DELETE_DELAY_MS = 2500;
 const ALLOWED_USER_IDS = (process.env.ALLOWED_USER_IDS || '')
   .split(',')
   .map((s) => s.trim())
@@ -27,6 +33,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
+}
+if (!ALLOWED_USER_IDS.length) {
+  console.warn('WARNING: ALLOWED_USER_IDS is empty, so nobody can use /purge. Add the Haven user ids of your moderators.');
 }
 
 /** @type {{ id: string|number, content: string, username: string, at: number }[]} */
@@ -57,20 +66,27 @@ function originBase() {
   return new URL(HAVEN_WEBHOOK_URL).origin;
 }
 
+// Fails closed: an empty allowlist means nobody may purge.
 function isAllowed(user) {
-  if (!ALLOWED_USER_IDS.length) return true;
+  if (!ALLOWED_USER_IDS.length) return false;
   if (!user || user.id == null) return false;
   return ALLOWED_USER_IDS.some((id) => String(id) === String(user.id));
 }
 
-async function postToHaven(content) {
+// With a recipientId, Haven shows the reply only to that one person.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -82,7 +98,7 @@ async function deleteMessage(messageId) {
   const token = webhookToken();
   if (!token || messageId == null) return false;
   const url = `${originBase()}/api/webhooks/${token}/messages/${messageId}`;
-  const res = await fetch(url, { method: 'DELETE' });
+  const res = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(10000) });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.warn(`[delete] ${messageId} → ${res.status} ${text.slice(0, 200)}`);
@@ -107,6 +123,7 @@ async function registerCommands() {
         { name: 'status', description: 'Show buffer size' },
       ],
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -130,8 +147,7 @@ function extractMessage(payload) {
   const id = msg.id ?? msg.message_id ?? payload.message_id ?? payload.messageId ?? null;
   const user = msg.user || msg.author || payload.user || payload.author || {};
   const username = user.username || user.displayName || msg.username || '';
-  const isBot = !!(user.is_bot || user.isBot || msg.is_bot || msg.webhook_id || msg.webhookId);
-  return { content, id, username, isBot };
+  return { content, id, username };
 }
 
 function removeFromRing(ids) {
@@ -153,20 +169,32 @@ async function deleteMany(entries) {
     } else {
       fail += 1;
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, DELETE_DELAY_MS));
   }
   removeFromRing(deletedIds);
   return { ok, fail };
 }
 
+// Haven only sends message events for messages people post, never for bot
+// or webhook messages, so the buffer only ever holds human messages.
+let purging = false;
+
+async function runPurge(entries) {
+  purging = true;
+  try {
+    return await deleteMany(entries);
+  } finally {
+    purging = false;
+  }
+}
+
 async function handleMessage(payload) {
-  const { content, id, username, isBot } = extractMessage(payload);
+  const { content, id, username } = extractMessage(payload);
   if (id == null) return { skipped: 'no-id' };
-  // Track bots too so spam from bots can be purged
   pushMessage({
     id,
     content: content.slice(0, 500),
-    username: isBot ? `${username || 'bot'}(bot)` : username,
+    username,
     at: Date.now(),
   });
   return { ok: true, buffered: ring.length };
@@ -176,9 +204,20 @@ async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   if (command !== 'purge') return { ignored: true };
 
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
   if (!isAllowed(user)) {
-    await postToHaven('❌ You are not allowed to use `/purge`.');
+    console.warn(`[purge] refused for ${user.username || 'unknown'} (id ${user.id ?? 'n/a'})`);
+    await postToHaven(
+      ALLOWED_USER_IDS.length
+        ? `❌ You are not allowed to use \`/purge\`. (Your user id is ${user.id ?? 'unknown'}.)`
+        : `❌ \`/purge\` is turned off until the bot owner sets ALLOWED_USER_IDS. (Your user id is ${user.id ?? 'unknown'}.)`,
+      user.id
+    );
+    return;
+  }
+  if (purging) {
+    await postToHaven('⏳ A purge is already running. Try again when it finishes.', user.id);
     return;
   }
 
@@ -213,7 +252,7 @@ async function handleSlash(payload) {
       return;
     }
     const slice = ring.slice(-count);
-    const { ok, fail } = await deleteMany(slice);
+    const { ok, fail } = await runPurge(slice);
     await postToHaven(
       `🧹 Deleted **${ok}** message(s)` +
         (fail ? `, **${fail}** failed` : '') +
@@ -237,7 +276,7 @@ async function handleSlash(payload) {
       );
       return;
     }
-    const { ok, fail } = await deleteMany(toDelete);
+    const { ok, fail } = await runPurge(toDelete);
     await postToHaven(
       `🧹 Purged **${ok}** message(s) matching \`${needle.slice(0, 60)}\`` +
         (fail ? ` (**${fail}** failed)` : '') +
@@ -296,14 +335,11 @@ app.post('/haven', async (req, res) => {
   }
 
   if (event === 'slash_command') {
-    try {
-      const result = await handleSlash(payload);
-      if (result && result.ignored) return res.json({ ignored: true });
-      return res.json({ ok: true });
-    } catch (err) {
-      console.error('slash handler error:', err.message);
-      return res.status(500).json({ error: err.message });
-    }
+    // Answer Haven right away: a purge is paced and can take close to a minute.
+    if (String(payload.command || '').toLowerCase() !== 'purge') return res.json({ ignored: true });
+    res.json({ ok: true });
+    handleSlash(payload).catch((err) => console.error('slash handler error:', err.message));
+    return;
   }
 
   if (event === 'message' || event === 'message-created' || event === 'message_create') {
@@ -322,7 +358,7 @@ app.post('/haven', async (req, res) => {
 app.listen(PORT, async () => {
   console.log(`purge bot listening on :${PORT}`);
   console.log(
-    `  buffer=${BUFFER_SIZE} maxDelete=${MAX_DELETE} allowlist=${ALLOWED_USER_IDS.length || 'any'}`
+    `  buffer=${BUFFER_SIZE} maxDelete=${MAX_DELETE} allowlist=${ALLOWED_USER_IDS.length || 'empty (purge disabled)'}`
   );
   try {
     await registerCommands();

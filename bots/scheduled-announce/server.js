@@ -7,6 +7,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -16,6 +17,8 @@ const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const STATE_FILE = process.env.STATE_FILE || './data/scheduled-announce-state.json';
 const TICK_INTERVAL_MS = Math.max(5000, parseInt(process.env.TICK_INTERVAL_MS || '15000', 10) || 15000);
+// Optional shared token for POST /tick. When empty, POST /tick is turned off.
+const TICK_TOKEN = (process.env.TICK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL) {
@@ -63,26 +66,35 @@ function parseSchedules() {
     .filter(Boolean);
 }
 
+// Job ids key the saved state. An explicit "id" wins; otherwise the id is a
+// hash of the schedule and message, so reordering or adding jobs does not
+// hand one job's history to another.
+function jobId(item, spec, message) {
+  if (item.id != null && String(item.id).trim()) return String(item.id).trim();
+  return 'job-' + crypto.createHash('sha256').update(`${spec}\n${message}`).digest('hex').slice(0, 12);
+}
+
 function normalizeSchedule(item, index) {
   if (!item || typeof item !== 'object') return null;
   const message = String(item.message || '').trim().slice(0, 4000);
   if (!message) return null;
-  const id = item.id != null ? String(item.id) : `job-${index}`;
   if (item.every_minutes != null || item.everyMinutes != null) {
     const mins = Math.max(1, parseInt(item.every_minutes ?? item.everyMinutes, 10) || 0);
     if (!mins) return null;
+    const id = jobId(item, `every:${mins}`, message);
     return { id, type: 'interval', everyMinutes: mins, message };
   }
   const daily = item.daily || item.hhmm || item.time;
   if (daily) {
     const m = String(daily).trim().match(/^(\d{1,2}):(\d{2})$/);
     if (!m) {
-      console.warn(`[schedules] bad daily time for ${id}: ${daily}`);
+      console.warn(`[schedules] bad daily time for job ${item.id ?? index}: ${daily}`);
       return null;
     }
     const hh = Math.min(23, Math.max(0, parseInt(m[1], 10)));
     const mm = Math.min(59, Math.max(0, parseInt(m[2], 10)));
     const offset = parseInt(item.timezone_offset_minutes ?? item.timezoneOffsetMinutes ?? 0, 10) || 0;
+    const id = jobId(item, `daily:${hh}:${mm}:${offset}`, message);
     return {
       id,
       type: 'daily',
@@ -92,7 +104,7 @@ function normalizeSchedule(item, index) {
       message,
     };
   }
-  console.warn(`[schedules] job ${id} needs every_minutes or daily`);
+  console.warn(`[schedules] job ${item.id ?? index} needs every_minutes or daily`);
   return null;
 }
 
@@ -100,6 +112,16 @@ const schedules = parseSchedules();
 if (!schedules.length) {
   console.error('FATAL: no valid schedules configured.');
   process.exit(1);
+}
+{
+  const ids = new Set();
+  for (const j of schedules) {
+    if (ids.has(j.id)) {
+      console.error(`FATAL: two schedules share the id "${j.id}". Give them different "id" values or messages.`);
+      process.exit(1);
+    }
+    ids.add(j.id);
+  }
 }
 
 function loadState() {
@@ -131,6 +153,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -155,7 +178,21 @@ async function fireJob(job) {
   console.log(`[${new Date().toISOString()}] fired ${job.id} (${job.type})`);
 }
 
+// Shared by the timer and POST /tick so two ticks never run at once.
+let ticking = false;
+
 async function tick() {
+  if (ticking) return false;
+  ticking = true;
+  try {
+    await runTick();
+  } finally {
+    ticking = false;
+  }
+  return true;
+}
+
+async function runTick() {
   const now = Date.now();
   for (const job of schedules) {
     if (!state.jobs[job.id]) state.jobs[job.id] = {};
@@ -185,8 +222,23 @@ async function tick() {
 
     if (job.type === 'daily') {
       const parts = localParts(now, job.offsetMinutes);
-      if (parts.hour === job.hour && parts.minute === job.minute) {
-        if (st.lastDailyKey === parts.dayKey) continue;
+      const pastTime = parts.hour > job.hour || (parts.hour === job.hour && parts.minute >= job.minute);
+      const brandNew = !st.lastDailyKey && !st.lastFiredAt && !st.armed;
+      if (brandNew && !pastTime) {
+        // First seen before today's time: let it fire today.
+        st.armed = true;
+        saveState(state);
+      }
+      if (pastTime && st.lastDailyKey !== parts.dayKey) {
+        // A brand new job first seen after today's time waits for tomorrow
+        // instead of firing the moment the bot starts.
+        if (brandNew) {
+          st.lastDailyKey = parts.dayKey;
+          saveState(state);
+          continue;
+        }
+        // Otherwise fire, even if the tick missed the exact minute (bot was
+        // busy, asleep or restarting). It catches up once, the same day only.
         try {
           await fireJob(job);
           st.lastDailyKey = parts.dayKey;
@@ -218,10 +270,21 @@ app.get('/health', (_req, res) => res.json({
     offsetMinutes: j.offsetMinutes,
   })),
 }));
-app.post('/tick', async (_req, res) => {
+function tokenMatches(req) {
+  if (!TICK_TOKEN) return false;
+  const auth = req.get('Authorization') || '';
+  const given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const a = crypto.createHash('sha256').update(given).digest();
+  const b = crypto.createHash('sha256').update(TICK_TOKEN).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+app.post('/tick', async (req, res) => {
+  if (!TICK_TOKEN) return res.status(404).json({ error: 'POST /tick is disabled (set TICK_TOKEN to enable it)' });
+  if (!tokenMatches(req)) return res.status(401).json({ error: 'invalid token' });
   try {
-    await tick();
-    res.json({ ok: true });
+    const ran = await tick();
+    res.json({ ok: true, skipped: !ran });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

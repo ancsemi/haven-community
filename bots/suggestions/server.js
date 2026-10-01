@@ -1,7 +1,8 @@
 // suggestions — Haven community bot
 //
 // Slash /suggest to submit ideas; /suggest list; /suggest approve|reject <id>.
-// Optional APPROVER_USER_IDS gate for moderate actions.
+// Only APPROVER_USER_IDS may approve or reject (an empty list means nobody),
+// and nobody can approve or reject their own suggestion.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -28,6 +29,9 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
+}
+if (!APPROVER_USER_IDS.length) {
+  console.warn('WARNING: APPROVER_USER_IDS is empty, so nobody can approve or reject suggestions. Add the Haven user ids of your approvers.');
 }
 
 function loadState() {
@@ -72,14 +76,20 @@ function webhookToken() {
   return m ? m[1] : '';
 }
 
-async function postToHaven(content) {
+// With a recipientId, Haven shows the reply only to that one person.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -108,6 +118,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -117,8 +128,9 @@ async function registerCommands() {
   }
 }
 
+// Fails closed: an empty allowlist means nobody may approve or reject.
 function isApprover(user) {
-  if (!APPROVER_USER_IDS.length) return true;
+  if (!APPROVER_USER_IDS.length) return false;
   if (!user || user.id == null) return false;
   return APPROVER_USER_IDS.some((id) => String(id) === String(user.id));
 }
@@ -182,6 +194,7 @@ function pruneSuggestions() {
 function addSuggestion(text, user) {
   const body = String(text || '').trim().slice(0, 1500);
   if (!body) throw new Error('Usage: `/suggest <text>`');
+  if (!user || user.id == null) throw new Error('Could not tell who you are, so the suggestion was not saved.');
   const id = state.nextId++;
   const item = {
     id,
@@ -204,6 +217,9 @@ function setStatus(id, status, user) {
   const s = state.suggestions[String(id)];
   if (!s) throw new Error(`No suggestion #${id}.`);
   if (s.status !== 'pending') throw new Error(`Suggestion #${id} is already ${s.status}.`);
+  if (s.userId != null && user && user.id != null && String(s.userId) === String(user.id)) {
+    throw new Error(`You can't approve or reject your own suggestion (#${id}).`);
+  }
   if (status !== 'approved' && status !== 'rejected') throw new Error('Invalid status.');
   s.status = status;
   s.moderatedAt = Date.now();
@@ -216,7 +232,8 @@ function setStatus(id, status, user) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
 
   if (command !== 'suggest') return { ignored: true };
 
@@ -239,7 +256,13 @@ async function handleSlash(payload) {
 
   if (head === 'approve' || head === 'reject') {
     if (!isApprover(user)) {
-      await postToHaven('❌ You are not allowed to moderate suggestions.');
+      console.warn(`[suggest] ${head} refused for ${user.username || 'unknown'} (id ${user.id ?? 'n/a'})`);
+      await postToHaven(
+        APPROVER_USER_IDS.length
+          ? `❌ You are not allowed to moderate suggestions. (Your user id is ${user.id ?? 'unknown'}.)`
+          : `❌ Approving and rejecting is turned off until the bot owner sets APPROVER_USER_IDS. (Your user id is ${user.id ?? 'unknown'}.)`,
+        user.id
+      );
       return;
     }
     const id = parseInt(parts[1], 10);
@@ -251,7 +274,7 @@ async function handleSlash(payload) {
       const s = setStatus(id, head === 'approve' ? 'approved' : 'rejected', user);
       await postToHaven(formatSuggestion(s));
     } catch (err) {
-      await postToHaven(`❌ ${err.message}`);
+      await postToHaven(`❌ ${err.message}`, user.id);
     }
     return;
   }
@@ -320,7 +343,7 @@ app.post('/haven', async (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`suggestions bot listening on :${PORT}`);
-  console.log(`  pending: ${listPending().length}, approvers: ${APPROVER_USER_IDS.length || 'any'}`);
+  console.log(`  pending: ${listPending().length}, approvers: ${APPROVER_USER_IDS.length || 'none (approve/reject disabled)'}`);
   try {
     await registerCommands();
   } catch (e) {

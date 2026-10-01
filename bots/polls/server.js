@@ -1,7 +1,8 @@
 // polls — Haven community bot
 //
-// Slash /poll for creating polls and viewing results; /vote <id> <n> to cast
-// a vote. State is persisted to STATE_FILE.
+// Slash /survey for creating polls and viewing results; /vote <id> <n> to cast
+// a vote. State is persisted to STATE_FILE. The command is /survey because
+// Haven reserves /poll for its own built-in polls.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -77,6 +78,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -91,7 +93,7 @@ async function registerCommands() {
   const base = `${origin}/api/webhooks/${token}/commands`;
   const cmds = [
     {
-      command: 'poll',
+      command: 'survey',
       description: 'Create a poll or view results',
       subcommands: [
         { name: 'results', description: 'Show tallies for a poll id' },
@@ -107,6 +109,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -116,10 +119,10 @@ async function registerCommands() {
   }
 }
 
+// One vote per Haven account: votes are keyed by the caller's user id.
 function voterKey(user) {
-  if (user && user.id != null) return `id:${user.id}`;
-  const name = (user && (user.username || user.displayName)) || 'anon';
-  return `name:${String(name).toLowerCase()}`;
+  if (user && user.id != null && user.id !== '') return `id:${user.id}`;
+  return null;
 }
 
 function tallies(poll) {
@@ -163,7 +166,7 @@ function createPoll(rawArgs, user) {
     .map((s) => s.trim())
     .filter(Boolean);
   if (parts.length < 3) {
-    throw new Error('Usage: `/poll Question | option1 | option2 [| option3…]`');
+    throw new Error('Usage: `/survey Question | option1 | option2 [| option3…]`');
   }
   const question = parts[0].slice(0, 500);
   const options = parts.slice(1).map((o) => o.slice(0, 200)).slice(0, MAX_OPTIONS);
@@ -197,6 +200,7 @@ function castVote(id, optionNum, user) {
     throw new Error(`Option must be 1–${poll.options.length}.`);
   }
   const key = voterKey(user);
+  if (!key) throw new Error('Could not tell who you are, so the vote was not counted.');
   poll.votes[key] = idx;
   saveState(state);
   return poll;
@@ -205,7 +209,8 @@ function castVote(id, optionNum, user) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
 
   if (command === 'vote') {
     const parts = args.split(/\s+/).filter(Boolean);
@@ -225,13 +230,13 @@ async function handleSlash(payload) {
     return;
   }
 
-  if (command !== 'poll') return { ignored: true };
+  if (command !== 'survey') return { ignored: true };
 
   const lower = args.toLowerCase();
   if (lower.startsWith('results')) {
     const id = parseInt(args.slice('results'.length).trim(), 10);
     if (!Number.isInteger(id)) {
-      await postToHaven('Usage: `/poll results <id>`');
+      await postToHaven('Usage: `/survey results <id>`');
       return;
     }
     const poll = getPoll(id);
@@ -245,7 +250,7 @@ async function handleSlash(payload) {
 
   if (!args) {
     await postToHaven(
-      'Usage: `/poll Question | option1 | option2` · `/poll results <id>` · `/vote <id> <n>`'
+      'Usage: `/survey Question | option1 | option2` · `/survey results <id>` · `/vote <id> <n>`'
     );
     return;
   }

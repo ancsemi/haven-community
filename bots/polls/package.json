@@ -1,13 +1,13 @@
 {
   "name": "haven-bot-polls",
   "version": "1.0.0",
-  "description": "Simple Haven polls via /poll and /vote slash commands.",
+  "description": "Simple Haven polls via /survey and /vote slash commands.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.6.0"
   },
   "dependencies": {
     "express": "^4.19.2"

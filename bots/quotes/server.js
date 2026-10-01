@@ -1,6 +1,6 @@
 // quotes — Haven community bot
 //
-// Slash /quote add|random|get|list. Quotes persist in STATE_FILE.
+// Slash /quote add|random|get|list|remove. Quotes persist in STATE_FILE.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -18,6 +18,12 @@ const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const STATE_FILE = process.env.STATE_FILE || './data/quotes-state.json';
 const MAX_QUOTES = Math.max(1, parseInt(process.env.MAX_QUOTES || '500', 10) || 500);
 const LIST_LIMIT = Math.max(1, parseInt(process.env.LIST_LIMIT || '15', 10) || 15);
+// Optional: user ids who may remove any quote. Everyone else can only remove
+// quotes they saved themselves.
+const ADMIN_USER_IDS = (process.env.ADMIN_USER_IDS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -68,14 +74,20 @@ function webhookToken() {
   return m ? m[1] : '';
 }
 
-async function postToHaven(content) {
+// With a recipientId, Haven shows the reply only to that one person.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -97,6 +109,7 @@ async function registerCommands() {
         { name: 'random', description: 'Random quote' },
         { name: 'get', description: 'Get quote by id' },
         { name: 'list', description: 'List recent quotes' },
+        { name: 'remove', description: 'Remove a quote you saved' },
       ],
     },
   ];
@@ -105,6 +118,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -118,11 +132,13 @@ function allQuotes() {
   return Object.values(state.quotes).filter(Boolean);
 }
 
+// q.author is the person who saved the quote, not the person being quoted,
+// so it is labelled "saved by".
 function formatQuote(q) {
   const who = q.author || 'anon';
   const when = q.createdAt ? new Date(q.createdAt).toISOString().slice(0, 10) : '';
   const lines = [`💬 **Quote #${q.id}**`, `> ${q.text}`];
-  lines.push(`_— ${who}${when ? ` · ${when}` : ''}_`);
+  lines.push(`_saved by ${who}${when ? ` · ${when}` : ''}_`);
   return lines.join('\n').slice(0, 4000);
 }
 
@@ -155,6 +171,12 @@ function getQuote(id) {
   return state.quotes[String(id)] || null;
 }
 
+function canRemove(q, user) {
+  if (!user || user.id == null) return false;
+  if (q.authorId != null && String(q.authorId) === String(user.id)) return true;
+  return ADMIN_USER_IDS.some((id) => String(id) === String(user.id));
+}
+
 function randomQuote() {
   const list = allQuotes();
   if (!list.length) return null;
@@ -174,7 +196,8 @@ function formatList() {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
 
   if (command !== 'quote') return { ignored: true };
 
@@ -183,8 +206,30 @@ async function handleSlash(payload) {
 
   if (!sub || sub === 'help') {
     await postToHaven(
-      'Usage: `/quote add <text>` · `/quote random` · `/quote get <id>` · `/quote list`'
+      'Usage: `/quote add <text>` · `/quote random` · `/quote get <id>` · `/quote list` · `/quote remove <id>`'
     );
+    return;
+  }
+
+  if (sub === 'remove' || sub === 'delete') {
+    const id = parseInt(parts[1], 10);
+    if (!Number.isInteger(id) || id < 1) {
+      await postToHaven('Usage: `/quote remove <id>`', user.id);
+      return;
+    }
+    const q = getQuote(id);
+    if (!q) {
+      await postToHaven(`No quote #${id}.`, user.id);
+      return;
+    }
+    if (!canRemove(q, user)) {
+      await postToHaven(`❌ Only the person who saved quote #${id} (or a quotes admin) can remove it.`, user.id);
+      return;
+    }
+    delete state.quotes[String(id)];
+    saveState(state);
+    console.log(`[quote] #${id} removed by ${user.username || 'unknown'} (id ${user.id})`);
+    await postToHaven(`🗑️ Removed quote #${id}.`);
     return;
   }
 

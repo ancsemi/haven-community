@@ -16,9 +16,10 @@ No full cron parser (keeps the bot dependency-free). Good enough for standups, r
 ]
 ```
 
-- `every_minutes` — fire every N minutes (from bot start / last fire tracked in state).
-- `daily` — `HH:MM` in 24h; optional `timezone_offset_minutes` from UTC (default `0` = UTC).
-- `message` — text posted to Haven (max 4000 chars).
+- `every_minutes`: fire every N minutes (from bot start / last fire tracked in state).
+- `daily`: `HH:MM` in 24h; optional `timezone_offset_minutes` from UTC (default `0` = UTC).
+- `message`: text posted to Haven (max 4000 chars).
+- `id` (optional): a name for the job. Without one, the id is built from the schedule and message, so editing a job's time or text makes it a new job (its history starts over). Set an `id` if you want to edit a job and keep its history.
 
 ### `CRON_SPECS` (simple string alternative)
 
@@ -44,8 +45,10 @@ cd haven-community/bots/scheduled-announce
 npm install
 cp .env.example .env
 # edit .env — set SCHEDULES_JSON
-node server.js
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
 
 ## Configuration (`.env`)
 
@@ -58,13 +61,14 @@ node server.js
 | `HAVEN_AVATAR_URL` | no | Avatar override |
 | `STATE_FILE` | no | Last-fire times (default `./data/scheduled-announce-state.json`) |
 | `TICK_INTERVAL_MS` | no | Scheduler tick (default `15000`) |
+| `TICK_TOKEN` | no | Enables `POST /tick` (send `Authorization: Bearer <token>`). Empty means `POST /tick` is off |
 | `PORT` | no | HTTP port for health (default `3000`) |
 
 ## Behaviour
 
 - Interval jobs track `lastFiredAt` so restarts do not double-fire immediately (fires when elapsed ≥ interval).
-- Daily jobs fire once per calendar day (key = `YYYY-MM-DD` in the schedule’s offset timezone).
-- Tick loop runs every `TICK_INTERVAL_MS`.
+- Daily jobs fire once per calendar day (key = `YYYY-MM-DD` in the schedule’s offset timezone). If the bot was down or busy at the scheduled minute, it posts once as soon as it can, as long as it is still the same day. A job added after today's time first fires tomorrow.
+- Tick loop runs every `TICK_INTERVAL_MS`. Only one tick runs at a time.
 
 ## License
 

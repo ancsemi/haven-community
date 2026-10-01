@@ -19,6 +19,7 @@ const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const STATE_FILE = process.env.STATE_FILE || './data/reminders-state.json';
 const TICK_INTERVAL_MS = Math.max(1000, parseInt(process.env.TICK_INTERVAL_MS || '5000', 10) || 5000);
 const MAX_REMINDERS = Math.max(1, parseInt(process.env.MAX_REMINDERS || '200', 10) || 200);
+const MAX_PER_USER = Math.max(1, parseInt(process.env.MAX_PER_USER || '10', 10) || 10);
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -85,18 +86,26 @@ function webhookToken() {
   return m ? m[1] : '';
 }
 
-async function postToHaven(content) {
+// With a recipientId, Haven shows the reply only to that one person.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Haven responded ${res.status}: ${text.slice(0, 300)}`);
+    const err = new Error(`Haven responded ${res.status}: ${text.slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
   }
 }
 
@@ -126,6 +135,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -150,8 +160,15 @@ function listText() {
 }
 
 function addReminder(durationLabel, ms, text, user) {
+  if (!user || user.id == null) {
+    throw new Error('Could not tell who you are, so the reminder was not saved.');
+  }
   if (state.reminders.length >= MAX_REMINDERS) {
     throw new Error(`Too many reminders (max ${MAX_REMINDERS}). Cancel some first.`);
+  }
+  const mine = state.reminders.filter((r) => String(r.userId) === String(user.id)).length;
+  if (mine >= MAX_PER_USER) {
+    throw new Error(`You already have ${mine} pending reminders (max ${MAX_PER_USER}). Cancel some first.`);
   }
   const id = state.nextId++;
   const dueAt = Date.now() + ms;
@@ -169,15 +186,29 @@ function addReminder(durationLabel, ms, text, user) {
   return item;
 }
 
-function cancelReminder(id) {
-  const before = state.reminders.length;
-  state.reminders = state.reminders.filter((r) => r.id !== id);
-  if (state.reminders.length === before) return false;
+// Only the person who created a reminder can cancel it.
+function cancelReminder(id, user) {
+  const r = state.reminders.find((x) => x.id === id);
+  if (!r) return 'missing';
+  if (!user || user.id == null || String(r.userId) !== String(user.id)) return 'forbidden';
+  state.reminders = state.reminders.filter((x) => x.id !== id);
   saveState(state);
-  return true;
+  return 'ok';
 }
 
+let ticking = false;
+
 async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    await runTick();
+  } finally {
+    ticking = false;
+  }
+}
+
+async function runTick() {
   const now = Date.now();
   const due = state.reminders.filter((r) => r.dueAt <= now);
   if (!due.length) return;
@@ -191,9 +222,16 @@ async function tick() {
       await postToHaven(content);
       console.log(`[${new Date().toISOString()}] fired reminder #${r.id}`);
     } catch (err) {
-      console.error(`[${new Date().toISOString()}] failed reminder #${r.id}:`, err.message);
-      state.reminders.push(r);
-      saveState(state);
+      // A 4xx (other than 429) means Haven will never accept this message, so
+      // drop it instead of retrying forever. Anything else is retried next tick.
+      const permanent = err.status >= 400 && err.status < 500 && err.status !== 429;
+      if (permanent) {
+        console.error(`[${new Date().toISOString()}] dropped reminder #${r.id} (Haven refused it):`, err.message);
+      } else {
+        console.error(`[${new Date().toISOString()}] failed reminder #${r.id}, will retry:`, err.message);
+        state.reminders.push(r);
+        saveState(state);
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
@@ -202,7 +240,8 @@ async function tick() {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
 
   if (command === 'reminders') {
     const sub = args.split(/\s+/)[0] || 'list';
@@ -230,8 +269,10 @@ async function handleSlash(payload) {
       await postToHaven('Usage: `/remind cancel <id>`');
       return;
     }
-    const ok = cancelReminder(id);
-    await postToHaven(ok ? `🗑️ Cancelled reminder **#${id}**.` : `No pending reminder **#${id}**.`);
+    const result = cancelReminder(id, user);
+    if (result === 'ok') await postToHaven(`🗑️ Cancelled reminder **#${id}**.`);
+    else if (result === 'forbidden') await postToHaven(`❌ Only the person who set reminder **#${id}** can cancel it.`, user.id);
+    else await postToHaven(`No pending reminder **#${id}**.`, user.id);
     return;
   }
 

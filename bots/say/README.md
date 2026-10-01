@@ -25,9 +25,13 @@ git clone https://github.com/ancsemi/haven-community.git
 cd haven-community/bots/say
 npm install
 cp .env.example .env
-# edit .env — set ALLOWED_USER_IDS for staff-only use
-node server.js
+# edit .env and set ALLOWED_USER_IDS
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
+
+If Haven reaches this bot at a `localhost` or LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Without it Haven refuses to call private addresses.
 
 ## Configuration (`.env`)
 
@@ -37,7 +41,7 @@ node server.js
 | `CALLBACK_SECRET` | yes | HMAC secret for `/haven` |
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
-| `ALLOWED_USER_IDS` | no | Comma-separated user ids; empty = anyone |
+| `ALLOWED_USER_IDS` | yes | Comma-separated Haven user ids allowed to use `/say`. Empty means nobody can |
 | `MAX_LENGTH` | no | Max text length (default `2000`) |
 | `HAVEN_WEBHOOK_TOKEN` | no | 64-hex token for slash registration |
 | `PORT` | no | HTTP port (default `3000`) |
@@ -45,7 +49,8 @@ node server.js
 ## Behaviour
 
 - Posts exactly the provided text (truncated) via the bot webhook.
-- Restrict who can announce with `ALLOWED_USER_IDS`.
+- Only people in `ALLOWED_USER_IDS` can use `/say`. If you don't know your id, run `/say` once and the bot tells you privately.
+- Each `/say` is logged to the console with the real sender's username and user id, so staff can see who posted what.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

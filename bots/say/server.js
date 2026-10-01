@@ -1,6 +1,7 @@
 // say — Haven community bot
 //
-// Slash /say <text> re-posts the text as the bot. Optional ALLOWED_USER_IDS.
+// Slash /say <text> re-posts the text as the bot. Only ALLOWED_USER_IDS may
+// use it; an empty list means nobody can.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -25,6 +26,9 @@ if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
 }
+if (!ALLOWED_USER_IDS.length) {
+  console.warn('WARNING: ALLOWED_USER_IDS is empty, so nobody can use /say. Add the Haven user ids of your staff.');
+}
 
 function verifySignature(rawBody, headerValue) {
   if (!headerValue) return false;
@@ -47,20 +51,27 @@ function webhookToken() {
   return m ? m[1] : '';
 }
 
+// Fails closed: an empty allowlist means nobody may use /say.
 function isAllowed(user) {
-  if (!ALLOWED_USER_IDS.length) return true;
+  if (!ALLOWED_USER_IDS.length) return false;
   if (!user || user.id == null) return false;
   return ALLOWED_USER_IDS.some((id) => String(id) === String(user.id));
 }
 
-async function postToHaven(content) {
+// With a recipientId, Haven shows the reply only to that one person.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -79,6 +90,7 @@ async function registerCommands() {
       command: 'say',
       description: 'Re-post text as the bot: /say <text>',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status} ${await res.text().catch(() => '')}`);
@@ -91,22 +103,29 @@ async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   if (command !== 'say') return { ignored: true };
 
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
+  const who = `${user.username || 'unknown'} (id ${user.id ?? 'n/a'})`;
   if (!isAllowed(user)) {
-    await postToHaven('❌ You are not allowed to use `/say`.');
+    console.warn(`[${new Date().toISOString()}] say refused for ${who}`);
+    await postToHaven(
+      ALLOWED_USER_IDS.length
+        ? `❌ You are not allowed to use \`/say\`. (Your user id is ${user.id ?? 'unknown'}.)`
+        : `❌ \`/say\` is turned off until the bot owner sets ALLOWED_USER_IDS. (Your user id is ${user.id ?? 'unknown'}.)`,
+      user.id
+    );
     return;
   }
 
   const text = String(payload.args || '').trim().slice(0, MAX_LENGTH);
   if (!text) {
-    await postToHaven('Usage: `/say <text>`');
+    await postToHaven('Usage: `/say <text>`', user.id);
     return;
   }
 
   await postToHaven(text.slice(0, 4000));
-  console.log(
-    `[${new Date().toISOString()}] say by ${user.username || user.id || 'unknown'} len=${text.length}`
-  );
+  // Audit line: who really sent each /say message.
+  console.log(`[${new Date().toISOString()}] say by ${who} len=${text.length}`);
 }
 
 const app = express();
@@ -115,7 +134,7 @@ app.use('/haven', express.raw({ type: '*/*', limit: '256kb' }));
 app.get('/', (_req, res) => {
   res
     .type('text/plain')
-    .send(`say bot running. allowlist=${ALLOWED_USER_IDS.length || 'any'}`);
+    .send(`say bot running. allowlist=${ALLOWED_USER_IDS.length || 'empty (say disabled)'}`);
 });
 app.get('/health', (_req, res) =>
   res.json({ ok: true, allowedUsers: ALLOWED_USER_IDS.length })
@@ -162,7 +181,7 @@ app.post('/haven', async (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`say bot listening on :${PORT}`);
-  console.log(`  allowlist: ${ALLOWED_USER_IDS.length || 'any (open)'}`);
+  console.log(`  allowlist: ${ALLOWED_USER_IDS.length || 'empty (say disabled)'}`);
   try {
     await registerCommands();
   } catch (e) {

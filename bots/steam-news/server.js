@@ -7,6 +7,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -21,10 +22,14 @@ const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const POLL_INTERVAL_SEC = Math.max(60, parseInt(process.env.POLL_INTERVAL_SEC || '300', 10) || 300);
 const MAX_ITEMS_PER_APP = Math.max(1, parseInt(process.env.MAX_ITEMS_PER_APP || '3', 10) || 3);
 const NEWS_COUNT = Math.max(5, Math.min(50, parseInt(process.env.NEWS_COUNT || '15', 10) || 15));
-const BODY_MAX_CHARS = Math.max(0, parseInt(process.env.BODY_MAX_CHARS || '400', 10) || 400);
+// Snippet length. 0 means no snippet at all (title and link only).
+const BODY_MAX_CHARS_RAW = parseInt(process.env.BODY_MAX_CHARS ?? '400', 10);
+const BODY_MAX_CHARS = Number.isInteger(BODY_MAX_CHARS_RAW) && BODY_MAX_CHARS_RAW >= 0 ? BODY_MAX_CHARS_RAW : 400;
 const STATE_FILE = process.env.STATE_FILE || './data/steam-news-state.json';
 const POST_MESSAGE = process.env.POST_MESSAGE
   || '🎮 **Steam news** — {app}\n**{title}**\n{url}\n_{feed}_';
+// Optional shared token for POST /poll. When empty, POST /poll is turned off.
+const POLL_TOKEN = (process.env.POLL_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL) {
@@ -77,6 +82,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -85,7 +91,7 @@ async function postToHaven(content) {
 }
 
 function formatItem(appId, item) {
-  let contents = stripHtml(item.contents || '');
+  let contents = BODY_MAX_CHARS > 0 ? stripHtml(item.contents || '') : '';
   if (BODY_MAX_CHARS > 0 && contents.length > BODY_MAX_CHARS) {
     contents = contents.slice(0, BODY_MAX_CHARS).trimEnd() + '…';
   }
@@ -107,7 +113,8 @@ async function fetchNews(appId) {
   const params = new URLSearchParams({
     appid: String(appId),
     count: String(NEWS_COUNT),
-    maxlength: String(BODY_MAX_CHARS > 0 ? BODY_MAX_CHARS + 100 : 0),
+    // Steam treats maxlength=0 as "full text", so ask for a tiny body when no snippet is wanted.
+    maxlength: String(BODY_MAX_CHARS > 0 ? BODY_MAX_CHARS + 100 : 1),
     format: 'json',
   });
   const url = `https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?${params}`;
@@ -127,7 +134,7 @@ async function fetchNews(appId) {
   return items.map((n) => ({
     gid: String(n.gid),
     title: n.title || 'Untitled',
-    url: n.url || n.contents || '',
+    url: n.url || `https://store.steampowered.com/news/app/${encodeURIComponent(appId)}`,
     author: n.author || '',
     contents: n.contents || '',
     feedlabel: n.feedlabel || '',
@@ -160,6 +167,9 @@ async function pollApp(appId) {
   for (const it of toPost) {
     await postToHaven(formatItem(appId, it));
     seen.add(it.gid);
+    // Save after every post so a failure later in the loop cannot repost this one.
+    state.seen[appId] = [...seen].slice(-500);
+    saveState(state);
     console.log(`[${new Date().toISOString()}] posted app ${appId}: ${it.title}`);
     await new Promise((r) => setTimeout(r, 800));
   }
@@ -170,15 +180,34 @@ async function pollApp(appId) {
   saveState(state);
 }
 
+// Shared by the timer and POST /poll so two polls never run at once.
+let polling = false;
+
 async function pollAll() {
-  for (const appId of APP_IDS) {
-    try {
-      await pollApp(appId);
-    } catch (err) {
-      console.error(`[${new Date().toISOString()}] poll failed app ${appId}:`, err.message);
+  if (polling) return false;
+  polling = true;
+  try {
+    for (const appId of APP_IDS) {
+      try {
+        await pollApp(appId);
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] poll failed app ${appId}:`, err.message);
+      }
+      await new Promise((r) => setTimeout(r, 400));
     }
-    await new Promise((r) => setTimeout(r, 400));
+  } finally {
+    polling = false;
   }
+  return true;
+}
+
+function tokenMatches(req) {
+  if (!POLL_TOKEN) return false;
+  const auth = req.get('Authorization') || '';
+  const given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const a = crypto.createHash('sha256').update(given).digest();
+  const b = crypto.createHash('sha256').update(POLL_TOKEN).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 const app = express();
@@ -191,10 +220,12 @@ app.get('/', (_req, res) => {
 app.get('/health', (_req, res) =>
   res.json({ ok: true, appIds: APP_IDS, pollIntervalSec: POLL_INTERVAL_SEC })
 );
-app.post('/poll', async (_req, res) => {
+app.post('/poll', async (req, res) => {
+  if (!POLL_TOKEN) return res.status(404).json({ error: 'POST /poll is disabled (set POLL_TOKEN to enable it)' });
+  if (!tokenMatches(req)) return res.status(401).json({ error: 'invalid token' });
   try {
-    await pollAll();
-    res.json({ ok: true });
+    const ran = await pollAll();
+    res.json({ ok: true, skipped: !ran });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

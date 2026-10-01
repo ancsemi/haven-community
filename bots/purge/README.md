@@ -12,7 +12,7 @@ Haven bots do not get a full message history API, so this bot keeps an in-memory
 | Command | Description |
 |---------|-------------|
 | `/purge match <substring>` | Delete tracked messages containing the text |
-| `/purge last <n>` | Delete last N tracked messages (capped by `MAX_DELETE`) |
+| `/purge last <n>` | Delete last N tracked messages (capped by `MAX_DELETE`, at most 20) |
 | `/purge status` | Show how many messages are buffered |
 
 ## Setup
@@ -25,7 +25,9 @@ Haven bots do not get a full message history API, so this bot keeps an in-memory
 4. Subscribe to **`message`** events (and slash commands).
 5. Copy **Webhook URL** → `HAVEN_WEBHOOK_URL`.
 6. Copy **Webhook Token** → `HAVEN_WEBHOOK_TOKEN` (**required** for DELETE).
-7. Ensure the bot is allowed to delete messages (moderation / delete capability as required by your Haven version).
+7. Put your moderators' Haven user ids in `ALLOWED_USER_IDS`. This is required: with an empty list nobody can use `/purge`. If you don't know your id, run `/purge` once and the bot tells you privately.
+
+No moderation permission is needed on the Haven bot. Haven lets any bot delete single messages in its own channel with its webhook token, which is also why the allowlist matters.
 
 ### 2. Host this bot
 
@@ -35,8 +37,12 @@ cd haven-community/bots/purge
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
+
+If Haven reaches this bot at a `localhost` or LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Without it Haven refuses to call private addresses.
 
 ## Configuration (`.env`)
 
@@ -47,15 +53,17 @@ node server.js
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
 | `BUFFER_SIZE` | no | Ring buffer capacity (default `200`) |
-| `MAX_DELETE` | no | Max deletes per command (default `25`) |
-| `ALLOWED_USER_IDS` | no | Comma-separated user ids; empty = anyone |
+| `MAX_DELETE` | no | Max deletes per command (default `20`, never more than `20`) |
+| `ALLOWED_USER_IDS` | yes | Comma-separated Haven user ids allowed to purge. Empty means nobody can |
 | `HAVEN_WEBHOOK_TOKEN` | yes* | Token for message DELETE + slash (*required in practice) |
 | `PORT` | no | HTTP port (default `3000`) |
 
 ## Behaviour
 
 - Only messages received **after** the bot started (and while it is running) can be purged.
-- Deletes use `DELETE /api/webhooks/<token>/messages/<id>`.
+- Haven never sends bot or webhook messages to bots, so the bot cannot see or purge other bots' messages.
+- Deletes use `DELETE /api/webhooks/<token>/messages/<id>`, one message per request.
+- Haven allows 30 webhook requests per minute per IP, so deletes are spaced 2.5 seconds apart. A full purge of 20 messages takes about 50 seconds, and only one purge runs at a time.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

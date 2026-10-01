@@ -1,7 +1,9 @@
 // report — Haven community bot
 //
-// /report <text> posts to REPORT_WEBHOOK_URL (or HAVEN_WEBHOOK_URL channel)
-// with reporter id, or anonymously if ANONYMOUS=true.
+// /report <text> posts to REPORT_WEBHOOK_URL (a staff-only channel) with the
+// reporter's id, or anonymously if ANONYMOUS=true. Replies to the reporter are
+// private (ephemeral). Without REPORT_WEBHOOK_URL the bot refuses reports
+// rather than posting them in the public channel.
 //
 // See README.md for setup. Configuration is via environment variables only.
 
@@ -12,13 +14,15 @@ const express = require('express');
 
 const HAVEN_WEBHOOK_URL = process.env.HAVEN_WEBHOOK_URL;
 const CALLBACK_SECRET = process.env.CALLBACK_SECRET || '';
-const REPORT_WEBHOOK_URL = (process.env.REPORT_WEBHOOK_URL || '').trim() || HAVEN_WEBHOOK_URL;
+const REPORT_WEBHOOK_URL = (process.env.REPORT_WEBHOOK_URL || '').trim();
 const HAVEN_USERNAME = process.env.HAVEN_USERNAME || 'Report Bot';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const ANONYMOUS = String(process.env.ANONYMOUS || 'false').toLowerCase() === 'true';
-const ACK_PUBLIC = String(process.env.ACK_PUBLIC || 'true').toLowerCase() !== 'false';
+// ACK_PUBLIC is the old name; the ack is now always private to the reporter.
+const ACK = String(process.env.ACK ?? process.env.ACK_PUBLIC ?? 'true').toLowerCase() !== 'false';
 const MAX_LENGTH = Math.max(1, parseInt(process.env.MAX_LENGTH || '1500', 10) || 1500);
-const COOLDOWN_SEC = Math.max(0, parseInt(process.env.COOLDOWN_SEC || '60', 10) || 60);
+const COOLDOWN_RAW = parseInt(process.env.COOLDOWN_SEC ?? '60', 10);
+const COOLDOWN_SEC = Number.isInteger(COOLDOWN_RAW) && COOLDOWN_RAW >= 0 ? COOLDOWN_RAW : 60;
 const PREFIX = process.env.PREFIX || '🚨 **User report**';
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -28,8 +32,7 @@ if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   process.exit(1);
 }
 if (!REPORT_WEBHOOK_URL) {
-  console.error('FATAL: REPORT_WEBHOOK_URL or HAVEN_WEBHOOK_URL is required for posting reports.');
-  process.exit(1);
+  console.warn('WARNING: REPORT_WEBHOOK_URL is not set, so /report is refused. Point it at a bot in a staff-only channel.');
 }
 
 const cooldowns = new Map();
@@ -61,15 +64,21 @@ function actorKey(user) {
   return name ? `name:${String(name).toLowerCase()}` : 'anon';
 }
 
-async function postWebhook(url, content, username) {
+async function postWebhook(url, content, username, recipientId) {
   const body = { content };
   if (username) body.username = username;
   else if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  // With a recipientId, Haven shows the message only to that one person.
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -79,6 +88,15 @@ async function postWebhook(url, content, username) {
 
 async function postToChannel(content) {
   return postWebhook(HAVEN_WEBHOOK_URL, content, HAVEN_USERNAME);
+}
+
+// Private reply to the reporter. Never falls back to a public post.
+async function replyTo(user, content) {
+  if (!user || user.id == null) {
+    console.warn('[report] no reporter id, private reply skipped');
+    return;
+  }
+  return postWebhook(HAVEN_WEBHOOK_URL, content, HAVEN_USERNAME, user.id);
 }
 
 async function postReport(content) {
@@ -96,6 +114,7 @@ async function registerCommands() {
       command: 'report',
       description: 'Send a report to staff: /report <text>',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     console.warn(`[commands] register failed: ${res.status}`);
@@ -134,13 +153,20 @@ async function handleSlash(payload) {
   if (command !== 'report') return { ignored: true };
 
   const text = String(payload.args || '').trim().slice(0, MAX_LENGTH);
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
+
+  if (!REPORT_WEBHOOK_URL) {
+    await replyTo(user, '❌ Reports are not set up on this server yet, so nothing was sent. Please contact a moderator directly.');
+    return;
+  }
 
   if (!text) {
-    await postToChannel(
+    await replyTo(
+      user,
       ANONYMOUS
-        ? 'Usage: `/report <text>` — your identity is **hidden** from staff posts.'
-        : 'Usage: `/report <text>` — staff will see your user id.'
+        ? 'Usage: `/report <text>`. Your identity is **hidden** from staff posts.'
+        : 'Usage: `/report <text>`. Staff will see your username and user id.'
     );
     return;
   }
@@ -148,17 +174,18 @@ async function handleSlash(payload) {
   const key = actorKey(user);
   const wait = checkCooldown(key);
   if (wait != null) {
-    await postToChannel(`⏳ Please wait **${wait}s** before another report.`);
+    await replyTo(user, `⏳ Please wait **${wait}s** before another report.`);
     return;
   }
 
   try {
     await postReport(formatReport(text, user));
-    if (ACK_PUBLIC) {
-      await postToChannel('✅ Report submitted to staff. Thank you.');
+    if (ACK) {
+      await replyTo(user, '✅ Report submitted to staff. Thank you.');
     }
   } catch (err) {
-    await postToChannel(`❌ Could not submit report: ${err.message}`);
+    console.error('[report] could not submit:', err.message);
+    await replyTo(user, '❌ Could not submit your report. Please try again later or contact a moderator directly.');
   }
 }
 
@@ -169,14 +196,14 @@ app.get('/', (_req, res) => {
   res
     .type('text/plain')
     .send(
-      `report bot running. anonymous=${ANONYMOUS} separateWebhook=${REPORT_WEBHOOK_URL !== HAVEN_WEBHOOK_URL}`
+      `report bot running. anonymous=${ANONYMOUS} reportWebhookSet=${!!REPORT_WEBHOOK_URL}`
     );
 });
 app.get('/health', (_req, res) =>
   res.json({
     ok: true,
     anonymous: ANONYMOUS,
-    separateReportWebhook: REPORT_WEBHOOK_URL !== HAVEN_WEBHOOK_URL,
+    reportWebhookSet: !!REPORT_WEBHOOK_URL,
   })
 );
 

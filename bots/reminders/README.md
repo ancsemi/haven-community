@@ -9,7 +9,7 @@ Persists pending reminders to disk and fires them by POSTing to the bot webhook 
 | Command | Description |
 |---------|-------------|
 | `/remind <duration> <text>` | Schedule a reminder (e.g. `10m`, `2h`, `1d`) |
-| `/remind cancel <id>` | Cancel a pending reminder by id |
+| `/remind cancel <id>` | Cancel a pending reminder by id (only the person who set it) |
 | `/reminders list` | List pending reminders |
 | `/reminders` | Same as list |
 
@@ -57,8 +57,12 @@ cd haven-community/bots/reminders
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
+
+If Haven reaches this bot at a `localhost` or LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Without it Haven refuses to call private addresses.
 
 ## Configuration (`.env`)
 
@@ -71,6 +75,7 @@ node server.js
 | `STATE_FILE` | no | Pending reminders path (default `./data/reminders-state.json`) |
 | `TICK_INTERVAL_MS` | no | How often to check due reminders (default `5000`) |
 | `MAX_REMINDERS` | no | Cap on stored reminders (default `200`) |
+| `MAX_PER_USER` | no | Cap on pending reminders per person (default `10`) |
 | `HAVEN_WEBHOOK_TOKEN` | no | 64-hex token for slash registration |
 | `PORT` | no | HTTP port (default `3000`) |
 
@@ -78,6 +83,7 @@ node server.js
 
 - Reminders survive process restarts via `STATE_FILE`.
 - Fired reminders are removed from state after a successful post.
+- If Haven rejects a reminder outright (a 4xx error such as a removed webhook), it is dropped and logged. Network errors, 5xx and 429 are retried on the next tick.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
 ## License

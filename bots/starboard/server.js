@@ -23,6 +23,8 @@ const REPOST_ON_INCREMENT = String(process.env.REPOST_ON_INCREMENT || 'false').t
 const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const STATE_FILE = process.env.STATE_FILE || './data/starboard-state.json';
+// Keep state for at most this many messages; the least recently starred go first.
+const MAX_ENTRIES = Math.max(100, parseInt(process.env.MAX_ENTRIES || '2000', 10) || 2000);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!POST_URL || !CALLBACK_SECRET) {
@@ -82,6 +84,7 @@ async function postToStarboard(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -104,6 +107,15 @@ function extractReaction(payload) {
   const content = msg.content || payload.content || payload.messageContent || '';
   const msgAuthor = msg.user || msg.author || payload.messageAuthor || null;
   return { messageId, emoji, authorName, authorId, content, msgAuthor };
+}
+
+function pruneEntries() {
+  const keys = Object.keys(state.entries);
+  if (keys.length <= MAX_ENTRIES) return;
+  keys
+    .sort((a, b) => (state.entries[a].updatedAt || 0) - (state.entries[b].updatedAt || 0))
+    .slice(0, keys.length - MAX_ENTRIES)
+    .forEach((k) => delete state.entries[k]);
 }
 
 function buildStarboardMessage(messageId, emoji, entry) {
@@ -143,6 +155,7 @@ async function handleReaction(payload) {
     if (name) entry.msgAuthor = name;
   }
   entry.lastAuthor = authorName;
+  entry.updatedAt = Date.now();
 
   if (authorId) {
     if (!entry.reactors.includes(authorId)) {
@@ -153,6 +166,7 @@ async function handleReaction(payload) {
     entry.count = (entry.count || 0) + 1;
   }
 
+  pruneEntries();
   saveState(state);
 
   const shouldPost = entry.count >= THRESHOLD && (

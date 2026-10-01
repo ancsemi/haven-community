@@ -19,12 +19,21 @@ const HAVEN_USERNAME = process.env.HAVEN_USERNAME || '';
 const HAVEN_AVATAR_URL = process.env.HAVEN_AVATAR_URL || '';
 const STATE_FILE = process.env.STATE_FILE || './data/rsvp-state.json';
 const MAX_EVENTS = Math.max(1, parseInt(process.env.MAX_EVENTS || '50', 10) || 50);
+// Optional: user ids who may close or delete any event. The event's host can
+// always close or delete their own event.
+const ADMIN_USER_IDS = (process.env.ADMIN_USER_IDS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 const HAVEN_WEBHOOK_TOKEN = (process.env.HAVEN_WEBHOOK_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL || !CALLBACK_SECRET) {
   console.error('FATAL: HAVEN_WEBHOOK_URL and CALLBACK_SECRET are both required.');
   process.exit(1);
+}
+if (!ADMIN_USER_IDS.length) {
+  console.warn('WARNING: ADMIN_USER_IDS is empty, so only each event\'s host can close or delete it.');
 }
 
 function loadState() {
@@ -69,14 +78,20 @@ function webhookToken() {
   return m ? m[1] : '';
 }
 
-async function postToHaven(content) {
+// With a recipientId, Haven shows the reply only to that one person.
+async function postToHaven(content, recipientId) {
   const body = { content };
   if (HAVEN_USERNAME) body.username = HAVEN_USERNAME;
   if (HAVEN_AVATAR_URL) body.avatar_url = HAVEN_AVATAR_URL;
+  if (recipientId != null) {
+    body.ephemeral = true;
+    body.recipient_id = recipientId;
+  }
   const res = await fetch(HAVEN_WEBHOOK_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -108,6 +123,7 @@ async function registerCommands() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       console.warn(`[commands] register /${body.command} failed: ${res.status}`);
@@ -125,21 +141,35 @@ function userId(user) {
   return user && user.id != null ? String(user.id) : null;
 }
 
+// RSVPs are keyed by the caller's Haven user id, one per account.
 function rsvpKey(user) {
   const id = userId(user);
-  if (id) return `id:${id}`;
-  return `name:${userLabel(user).toLowerCase()}`;
+  return id ? `id:${id}` : null;
+}
+
+// Fails closed: only the host, or someone in ADMIN_USER_IDS, may manage an event.
+function canManage(ev, user) {
+  const id = userId(user);
+  if (!id) return false;
+  if (ev.hostId != null && String(ev.hostId) === id) return true;
+  return ADMIN_USER_IDS.some((a) => String(a) === id);
 }
 
 function openEvents() {
   return Object.values(state.events).filter((e) => e && e.status === 'open');
 }
 
+// Drops the oldest closed events once over MAX_EVENTS. Open events are never
+// pruned; createEvent already refuses new events when MAX_EVENTS are open.
 function pruneEvents() {
-  const all = Object.values(state.events).filter(Boolean).sort((a, b) => a.id - b.id);
-  while (all.length > MAX_EVENTS) {
-    const drop = all.shift();
+  let total = Object.values(state.events).filter(Boolean).length;
+  const closed = Object.values(state.events)
+    .filter((e) => e && e.status !== 'open')
+    .sort((a, b) => a.id - b.id);
+  while (total > MAX_EVENTS && closed.length) {
+    const drop = closed.shift();
     delete state.events[String(drop.id)];
+    total -= 1;
   }
 }
 
@@ -182,6 +212,7 @@ function formatEvent(ev, detailed) {
 function createEvent(title, user) {
   const t = String(title || '').trim().slice(0, 300);
   if (!t) throw new Error('Usage: `/event create <title>`');
+  if (!userId(user)) throw new Error('Could not tell who you are, so the event was not created.');
   if (openEvents().length >= MAX_EVENTS) {
     throw new Error(`Too many events (max ${MAX_EVENTS}). Close or delete some first.`);
   }
@@ -226,6 +257,7 @@ function setRsvp(id, response, user) {
   const normalized = map[resp];
   if (!normalized) throw new Error('Response must be yes, no, or maybe.');
   const key = rsvpKey(user);
+  if (!key) throw new Error('Could not tell who you are, so the RSVP was not saved.');
   ev.rsvps[key] = {
     key,
     response: normalized,
@@ -317,6 +349,10 @@ async function handleEventArgs(args, user) {
       await postToHaven(`No event #${id}.`);
       return;
     }
+    if (!canManage(ev, user)) {
+      await postToHaven(`❌ Only the host of event #${id} (or an events admin) can close it.`, userId(user));
+      return;
+    }
     ev.status = 'closed';
     ev.closedAt = Date.now();
     saveState();
@@ -330,8 +366,13 @@ async function handleEventArgs(args, user) {
       await postToHaven('Usage: `/event delete <id>`');
       return;
     }
-    if (!getEvent(id)) {
+    const ev = getEvent(id);
+    if (!ev) {
       await postToHaven(`No event #${id}.`);
+      return;
+    }
+    if (!canManage(ev, user)) {
+      await postToHaven(`❌ Only the host of event #${id} (or an events admin) can delete it.`, userId(user));
       return;
     }
     delete state.events[String(id)];
@@ -359,7 +400,8 @@ async function handleEventArgs(args, user) {
 async function handleSlash(payload) {
   const command = String(payload.command || '').toLowerCase();
   const args = String(payload.args || '').trim();
-  const user = payload.user || {};
+  // Haven sends the caller as payload.author ({ id, username }).
+  const user = payload.author || {};
 
   if (command === 'event') {
     await handleEventArgs(args, user);

@@ -7,6 +7,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -24,6 +25,8 @@ const STATE_FILE = process.env.STATE_FILE || './data/reddit-state.json';
 const USER_AGENT = (process.env.USER_AGENT || 'haven-bot-reddit/1.0 (community; +https://github.com/ancsemi/haven-community)').trim();
 const POST_MESSAGE = process.env.POST_MESSAGE
   || '📌 **r/{sub}** — {title}\n{url}\n_by u/{author} · {score} points_';
+// Optional shared token for POST /poll. When empty, POST /poll is turned off.
+const POLL_TOKEN = (process.env.POLL_TOKEN || '').trim();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 if (!HAVEN_WEBHOOK_URL) {
@@ -61,6 +64,7 @@ async function postToHaven(content) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -102,9 +106,7 @@ async function fetchSubNew(sub) {
       title: d.title || 'Untitled',
       author: d.author || 'unknown',
       score: d.score,
-      url: d.url && !d.url.includes('reddit.com')
-        ? (d.permalink ? `https://www.reddit.com${d.permalink}` : d.url)
-        : (d.permalink ? `https://www.reddit.com${d.permalink}` : d.url || ''),
+      url: d.permalink ? `https://www.reddit.com${d.permalink}` : (d.url || ''),
       created: d.created_utc,
     }));
 }
@@ -131,6 +133,9 @@ async function pollSub(sub) {
   for (const p of toPost) {
     await postToHaven(formatPost(sub, p));
     seen.add(p.id);
+    // Save after every post so a failure later in the loop cannot repost this one.
+    state.seen[sub] = [...seen].slice(-500);
+    saveState(state);
     console.log(`[${new Date().toISOString()}] posted r/${sub}: ${p.title}`);
     await new Promise((r) => setTimeout(r, 1200));
   }
@@ -141,15 +146,34 @@ async function pollSub(sub) {
   saveState(state);
 }
 
+// Shared by the timer and POST /poll so two polls never run at once.
+let polling = false;
+
 async function pollAll() {
-  for (const sub of SUBREDDITS) {
-    try {
-      await pollSub(sub);
-    } catch (err) {
-      console.error(`[${new Date().toISOString()}] poll failed r/${sub}:`, err.message);
+  if (polling) return false;
+  polling = true;
+  try {
+    for (const sub of SUBREDDITS) {
+      try {
+        await pollSub(sub);
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] poll failed r/${sub}:`, err.message);
+      }
+      await new Promise((r) => setTimeout(r, 500));
     }
-    await new Promise((r) => setTimeout(r, 500));
+  } finally {
+    polling = false;
   }
+  return true;
+}
+
+function tokenMatches(req) {
+  if (!POLL_TOKEN) return false;
+  const auth = req.get('Authorization') || '';
+  const given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const a = crypto.createHash('sha256').update(given).digest();
+  const b = crypto.createHash('sha256').update(POLL_TOKEN).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 const app = express();
@@ -164,10 +188,12 @@ app.get('/health', (_req, res) => res.json({
   subreddits: SUBREDDITS,
   pollIntervalSec: POLL_INTERVAL_SEC,
 }));
-app.post('/poll', async (_req, res) => {
+app.post('/poll', async (req, res) => {
+  if (!POLL_TOKEN) return res.status(404).json({ error: 'POST /poll is disabled (set POLL_TOKEN to enable it)' });
+  if (!tokenMatches(req)) return res.status(401).json({ error: 'invalid token' });
   try {
-    await pollAll();
-    res.json({ ok: true });
+    const ran = await pollAll();
+    res.json({ ok: true, skipped: !ran });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

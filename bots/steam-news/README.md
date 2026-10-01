@@ -6,7 +6,9 @@ Polls [Steam Web API](https://developer.valvesoftware.com/wiki/Steam_Web_API) ne
 
 - First poll **primes** seen `gid`s (nothing posted) so restarts don’t re-spam history.
 - Later polls post only new gids, oldest-first, capped by `MAX_ITEMS_PER_APP`.
-- State is stored in `STATE_FILE`.
+- State is stored in `STATE_FILE` and saved after every post, so a failure partway through never reposts what already went out.
+- Only one poll runs at a time. A timer tick or `POST /poll` that arrives during a poll is skipped.
+- If a news item has no link, `{url}` falls back to the game's Steam news page.
 
 ## Setup
 
@@ -26,8 +28,10 @@ cd haven-community/bots/steam-news
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
 
 Host needs outbound HTTPS to `api.steampowered.com`.
 
@@ -42,9 +46,10 @@ Host needs outbound HTTPS to `api.steampowered.com`.
 | `POLL_INTERVAL_SEC` | no | Poll period (default `300`, min `60`) |
 | `MAX_ITEMS_PER_APP` | no | Max new posts per app per poll (default `3`) |
 | `NEWS_COUNT` | no | Items fetched per app (default `15`) |
-| `BODY_MAX_CHARS` | no | Snippet length (default `400`) |
+| `BODY_MAX_CHARS` | no | Snippet length (default `400`). `0` posts no snippet, just the title and link |
 | `STATE_FILE` | no | Seen gids path (default `./data/steam-news-state.json`) |
 | `POST_MESSAGE` | no | Template with `{app}` `{title}` `{url}` `{feed}` `{author}` `{contents}` |
+| `POLL_TOKEN` | no | Enables `POST /poll`. Empty means `POST /poll` is off |
 | `PORT` | no | HTTP port (default `3000`) |
 
 ## Endpoints
@@ -53,7 +58,7 @@ Host needs outbound HTTPS to `api.steampowered.com`.
 |------|-------------|
 | `GET /` | Human status |
 | `GET /health` | JSON health |
-| `POST /poll` | Force a poll cycle |
+| `POST /poll` | Force a poll cycle. Only when `POLL_TOKEN` is set; send `Authorization: Bearer <POLL_TOKEN>` |
 
 ## License
 

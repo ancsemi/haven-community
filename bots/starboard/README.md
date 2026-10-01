@@ -4,14 +4,18 @@ Highlights popular messages when they collect enough star reactions — classic 
 
 Listens for Haven **`reaction-added`** events. Because each event may only include a single reaction, this bot **tracks counts in `STATE_FILE`** per `messageId` + emoji. When the count reaches `THRESHOLD`, it posts (or optionally re-posts) a starboard entry.
 
+### What Haven gives this bot (and what it doesn't)
+
+- A `reaction-added` event carries only the message id, the emoji and who reacted. It does **not** include the message text or the message author, so starboard posts show the count and message id, not the starred message itself.
+- Haven has no "reaction removed" event, so counts only go up. Un-starring a message does not lower its count.
+- A Haven bot only receives events from the channel it was created in, so the starboard only sees stars in that channel. To watch several channels, create a Haven bot in each one and point them all at this bot's callback URL with the same secret. Use `STARBOARD_WEBHOOK_URL` to post the results into a separate channel.
+
 ## What the message looks like
 
 ```
 ⭐ **3** | message `#142`
 Last reaction by **Ada**
 ```
-
-If the event payload includes message content (or a nested message object), that text is included under the header.
 
 ## Setup
 
@@ -31,8 +35,12 @@ cd haven-community/bots/starboard
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
+
+If Haven reaches this bot at a `localhost` or LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Without it Haven refuses to call private addresses.
 
 ## Configuration (`.env`)
 
@@ -47,13 +55,14 @@ node server.js
 | `HAVEN_USERNAME` | no | Display name override |
 | `HAVEN_AVATAR_URL` | no | Avatar override |
 | `STATE_FILE` | no | Count / posted state (default `./data/starboard-state.json`) |
+| `MAX_ENTRIES` | no | Max messages tracked in state (default `2000`); the least recently starred are dropped first |
 | `PORT` | no | HTTP port (default `3000`) |
 
 ## Behaviour
 
 - Counts unique reactors when user id is present; otherwise increments per event.
 - Signature verification accepts `sha256=<hex>` and bare hex.
-- Haven reaction payloads may omit original message body — the bot includes content when present.
+- Old entries are pruned once more than `MAX_ENTRIES` messages are tracked. A pruned message that gets starred again starts counting from zero.
 
 ## License
 

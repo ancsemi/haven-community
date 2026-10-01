@@ -1,19 +1,21 @@
 # polls
 
-Simple multi-option polls for Haven — create with `/poll`, vote with `/vote`, tallies with `/poll results`.
+Simple multi-option polls for Haven. Create with `/survey`, vote with `/vote`, see tallies with `/survey results`.
+
+The command is `/survey`, not `/poll`, because Haven reserves `/poll` for its own built-in polls and refuses to let a bot register it.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/poll Question \| option1 \| option2 \| option3` | Create a poll (pipe-separated) |
-| `/poll results <id>` | Show current tallies |
+| `/survey Question \| option1 \| option2 \| option3` | Create a poll (pipe-separated) |
+| `/survey results <id>` | Show current tallies |
 | `/vote <id> <n>` | Vote for option number `n` (1-based) |
 
 ### Example
 
 ```
-/poll Pizza night? | Yes | No | Maybe later
+/survey Pizza night? | Yes | No | Maybe later
 ```
 
 Bot posts:
@@ -44,8 +46,12 @@ cd haven-community/bots/polls
 npm install
 cp .env.example .env
 # edit .env
-node server.js
+node --env-file=.env server.js
 ```
+
+Use Node 20.6 or newer. The `--env-file` flag is what loads your `.env`, and older Node versions do not have it.
+
+If Haven reaches this bot at a `localhost` or LAN address, set `HAVEN_ALLOW_PRIVATE_CALLBACKS=true` on the Haven server. Without it Haven refuses to call private addresses.
 
 ## Configuration (`.env`)
 
@@ -63,7 +69,7 @@ node server.js
 
 ## Behaviour
 
-- One vote per user per poll (changing vote moves the tally).
+- One vote per Haven account per poll, keyed by user id (voting again moves your vote).
 - Polls persist across restarts via `STATE_FILE`.
 - Accepts both `sha256=<hex>` and bare hex on `X-Haven-Signature`.
 
